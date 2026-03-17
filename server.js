@@ -4,7 +4,7 @@ import cors from 'cors'
 import Anthropic from '@anthropic-ai/sdk'
 
 const app = express()
-const PORT = process.env.PORT || 3001
+const PORT = process.env.PORT || 8080
 
 app.use(cors())
 app.use(express.json())
@@ -37,7 +37,7 @@ ${text}`
 
   try {
     const message = await anthropic.messages.create({
-      model: 'claude-haiku-4-5',
+      model: 'claude-sonnet-4-6',
       max_tokens: 4096,
       messages: [{ role: 'user', content: prompt }],
     })
@@ -49,6 +49,9 @@ ${text}`
     res.status(500).json({ error: 'Translation failed. Check your API key and try again.' })
   }
 })
+
+app.use(express.static('dist'));
+app.get('*', (req, res) => res.sendFile('index.html', { root: 'dist' }));
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`)

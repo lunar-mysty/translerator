@@ -37,7 +37,7 @@ ${text}`
 
   try {
     const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
+      model: 'claude-haiku-4-5',
       max_tokens: 4096,
       messages: [{ role: 'user', content: prompt }],
     })

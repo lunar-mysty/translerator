@@ -139,6 +139,29 @@ body {
   color: var(--text);
 }
 
+.custom-lang-input {
+  width: 100%;
+  margin-top: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 0.85rem;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.custom-lang-input:focus {
+  border-color: var(--border-focus);
+}
+
+.custom-lang-input::placeholder {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
 .swap-btn {
   display: flex;
   align-items: center;
@@ -413,6 +436,25 @@ body {
   background-position: left 0.75rem center;
   padding-right: 1rem;
   padding-left: 2rem;
+}
+
+/* Footer */
+.footer {
+  text-align: center;
+  padding: 2rem 0 1rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.footer a {
+  color: var(--accent);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.footer a:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
 }
 
 /* Responsive */

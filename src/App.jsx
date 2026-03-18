@@ -27,6 +27,8 @@ function useAutoResize(value) {
   return ref
 }
 
+const CUSTOM = 'Custom'
+
 const LANGUAGES = [
   'Auto-detect',
   'English',
@@ -58,6 +60,7 @@ const LANGUAGES = [
   'Danish',
   'Finnish',
   'Norwegian',
+  CUSTOM,
 ]
 
 const TARGET_LANGUAGES = LANGUAGES.filter((l) => l !== 'Auto-detect')
@@ -69,6 +72,8 @@ export default function App() {
   const [translatedText, setTranslatedText] = useState(saved.translatedText || '')
   const [sourceLang, setSourceLang] = useState(saved.sourceLang || 'Auto-detect')
   const [targetLang, setTargetLang] = useState(saved.targetLang || 'Spanish')
+  const [customSourceLang, setCustomSourceLang] = useState(saved.customSourceLang || '')
+  const [customTargetLang, setCustomTargetLang] = useState(saved.customTargetLang || '')
   const [tone, setTone] = useState(saved.tone || '')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -81,12 +86,16 @@ export default function App() {
   // Persist state to localStorage
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      sourceText, translatedText, sourceLang, targetLang, tone,
+      sourceText, translatedText, sourceLang, targetLang, customSourceLang, customTargetLang, tone,
     }))
-  }, [sourceText, translatedText, sourceLang, targetLang, tone])
+  }, [sourceText, translatedText, sourceLang, targetLang, customSourceLang, customTargetLang, tone])
+
+  const resolvedSourceLang = sourceLang === CUSTOM ? customSourceLang.trim() : sourceLang
+  const resolvedTargetLang = targetLang === CUSTOM ? customTargetLang.trim() : targetLang
 
   const translate = useCallback(async () => {
     if (!sourceText.trim()) return
+    if (targetLang === CUSTOM && !customTargetLang.trim()) return
 
     setLoading(true)
     setError('')
@@ -98,8 +107,8 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text: sourceText,
-          sourceLanguage: sourceLang,
-          targetLanguage: targetLang,
+          sourceLanguage: resolvedSourceLang || 'Auto-detect',
+          targetLanguage: resolvedTargetLang,
           tone: tone.trim() || undefined,
         }),
       })
@@ -112,13 +121,20 @@ export default function App() {
     } finally {
       setLoading(false)
     }
-  }, [sourceText, sourceLang, targetLang, tone])
+  }, [sourceText, resolvedSourceLang, resolvedTargetLang, tone, targetLang, customTargetLang])
 
   const handleSwap = () => {
     if (sourceLang === 'Auto-detect') return
 
-    setSourceLang(targetLang)
-    setTargetLang(sourceLang)
+    const prevSourceLang = sourceLang
+    const prevTargetLang = targetLang
+    const prevCustomSource = customSourceLang
+    const prevCustomTarget = customTargetLang
+
+    setSourceLang(prevTargetLang)
+    setTargetLang(prevSourceLang)
+    setCustomSourceLang(prevCustomTarget)
+    setCustomTargetLang(prevCustomSource)
     setSourceText(translatedText)
     setTranslatedText(sourceText)
   }
@@ -152,7 +168,7 @@ export default function App() {
   // Display language names in the user's UI language
   const langMap = languageNames[locale] || languageNames.en
   const displayLang = (lang) =>
-    lang === 'Auto-detect' ? t.autoDetect : (langMap[lang] || lang)
+    lang === 'Auto-detect' ? t.autoDetect : lang === CUSTOM ? (t.custom || 'Custom') : (langMap[lang] || lang)
 
   return (
     <div className="app">
@@ -196,6 +212,16 @@ export default function App() {
                 </option>
               ))}
             </select>
+            {sourceLang === CUSTOM && (
+              <input
+                type="text"
+                className="custom-lang-input"
+                placeholder={t.customLangPlaceholder || 'Type a language...'}
+                value={customSourceLang}
+                onChange={(e) => setCustomSourceLang(e.target.value)}
+                onKeyDown={handleKeyDown}
+              />
+            )}
           </div>
 
           <button
@@ -223,6 +249,16 @@ export default function App() {
                 </option>
               ))}
             </select>
+            {targetLang === CUSTOM && (
+              <input
+                type="text"
+                className="custom-lang-input"
+                placeholder={t.customLangPlaceholder || 'Type a language...'}
+                value={customTargetLang}
+                onChange={(e) => setCustomTargetLang(e.target.value)}
+                onKeyDown={handleKeyDown}
+              />
+            )}
           </div>
         </div>
 
@@ -346,7 +382,7 @@ export default function App() {
         <button
           className="translate-btn"
           onClick={translate}
-          disabled={loading || !sourceText.trim()}
+          disabled={loading || !sourceText.trim() || (targetLang === CUSTOM && !customTargetLang.trim())}
         >
           {loading ? t.translating : t.translate}
           {!loading && (
@@ -356,6 +392,10 @@ export default function App() {
           )}
         </button>
       </main>
+
+      <footer className="footer">
+        {t.madeWith} <a href="https://mysty.lol" target="_blank" rel="noopener noreferrer">mysty</a> {t.withAI}
+      </footer>
     </div>
   )
 }

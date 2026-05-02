@@ -1,7 +1,7 @@
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
-import Anthropic from '@anthropic-ai/sdk'
+// import { OpenRouter } from '@openrouter/sdk'
 
 const app = express()
 const PORT = process.env.PORT || 8080
@@ -9,9 +9,9 @@ const PORT = process.env.PORT || 8080
 app.use(cors())
 app.use(express.json())
 
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-})
+// const client = new OpenRouter({
+//   apiKey: process.env.OPENROUTER_API_KEY,
+// })
 
 app.post('/api/translate', async (req, res) => {
   const { text, sourceLanguage, targetLanguage, tone } = req.body
@@ -30,19 +30,37 @@ app.post('/api/translate', async (req, res) => {
 
   const prompt = `You are a professional translator. Translate the following text into ${targetLanguage}. ${sourceInstruction} ${toneInstruction}
 
-Return ONLY the translated text with no explanations, notes, or extra formatting. Do not wrap the translation in quotes.
+Return ONLY the translated text EXACTLY with no explanations, notes, or extra formatting. Do not wrap the translation in quotes.
+The translations should have the same meaning as the original text—prefer to translate to a more similar meaning than a similar amount of words or pronounciation.
 
 Text to translate:
 ${text}`
 
   try {
-    const message = await anthropic.messages.create({
-      model: 'claude-haiku-4-5',
-      max_tokens: 4096,
-      messages: [{ role: 'user', content: prompt }],
+    const url = "https://openrouter.ai/api/v1/chat/completions"
+    const headers = {
+      "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+      "Content-Type": "application/json"
+    }
+    const payload = {
+      "model": "anthropic/claude-haiku-4.5:nitro",
+      "messages": [
+        {
+          "role": "system",
+          "content": prompt
+        }
+      ]
+    };
+
+    const completion = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload)
     })
 
-    const translation = message.content[0].text
+    const data = await completion.json();
+
+    const translation = data.choices[0].message.content
     res.json({ translation })
   } catch (err) {
     console.error('Translation error:', err)

@@ -1,14 +1,11 @@
 {
   "name": "translerator",
-  "version": "1.0.0",
+  "version": "0.2.3",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
-    "dev:server": "node server.js",
-    "dev:client": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "server": "node server.js",
+    "build": "vite build"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

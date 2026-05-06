@@ -106,6 +106,12 @@ function Icon({ name, size = 18 }) {
         <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
       </svg>
     ),
+    settings: (
+      <svg {...common}>
+        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.72l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+        <circle cx="12" cy="12" r="3" />
+      </svg>
+    ),
     send: (
       <svg {...common}>
         <path d="M22 2 11 13" />
@@ -118,6 +124,12 @@ function Icon({ name, size = 18 }) {
         <path d="M20 7H4" />
         <path d="m8 21-4-4 4-4" />
         <path d="M4 17h16" />
+      </svg>
+    ),
+    x: (
+      <svg {...common}>
+        <path d="M18 6 6 18" />
+        <path d="m6 6 12 12" />
       </svg>
     ),
   }
@@ -153,6 +165,8 @@ export default function App() {
   const [modelMode, setModelMode] = useState(
     MODEL_MODES.includes(saved.modelMode) ? saved.modelMode : 'fast'
   )
+  const [autoTranslateEnabled, setAutoTranslateEnabled] = useState(saved.autoTranslateEnabled !== false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [copiedSource, setCopiedSource] = useState(false)
@@ -175,9 +189,9 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      sourceText, translatedText, sourceLang, targetLang, customSourceLang, customTargetLang, tone, modelMode,
+      sourceText, translatedText, sourceLang, targetLang, customSourceLang, customTargetLang, tone, modelMode, autoTranslateEnabled,
     }))
-  }, [sourceText, translatedText, sourceLang, targetLang, customSourceLang, customTargetLang, tone, modelMode])
+  }, [sourceText, translatedText, sourceLang, targetLang, customSourceLang, customTargetLang, tone, modelMode, autoTranslateEnabled])
 
   const resolvedSourceLang = sourceLang === CUSTOM ? customSourceLang.trim() : sourceLang
   const resolvedTargetLang = targetLang === CUSTOM ? customTargetLang.trim() : targetLang
@@ -235,15 +249,25 @@ export default function App() {
   }, [translate])
 
   const queueDebouncedAutoSubmit = () => {
+    if (!autoTranslateEnabled) {
+      clearPendingAutoTranslate()
+      return
+    }
+
     setDebouncedAutoSubmitVersion((version) => version + 1)
   }
 
   const queueInstantAutoSubmit = () => {
+    if (!autoTranslateEnabled) {
+      clearPendingAutoTranslate()
+      return
+    }
+
     setInstantAutoSubmitVersion((version) => version + 1)
   }
 
   useEffect(() => {
-    if (debouncedAutoSubmitVersion === 0) return undefined
+    if (debouncedAutoSubmitVersion === 0 || !autoTranslateEnabled) return undefined
 
     clearPendingAutoTranslate()
     autoTranslateTimerRef.current = setTimeout(() => {
@@ -252,14 +276,29 @@ export default function App() {
     }, AUTO_TRANSLATE_DELAY)
 
     return clearPendingAutoTranslate
-  }, [debouncedAutoSubmitVersion, clearPendingAutoTranslate])
+  }, [debouncedAutoSubmitVersion, autoTranslateEnabled, clearPendingAutoTranslate])
 
   useEffect(() => {
-    if (instantAutoSubmitVersion === 0) return
+    if (instantAutoSubmitVersion === 0 || !autoTranslateEnabled) return
 
     clearPendingAutoTranslate()
     latestTranslateRef.current?.({ dedupe: true })
-  }, [instantAutoSubmitVersion, clearPendingAutoTranslate])
+  }, [instantAutoSubmitVersion, autoTranslateEnabled, clearPendingAutoTranslate])
+
+  useEffect(() => {
+    if (!autoTranslateEnabled) clearPendingAutoTranslate()
+  }, [autoTranslateEnabled, clearPendingAutoTranslate])
+
+  useEffect(() => {
+    if (!settingsOpen) return undefined
+
+    const handleEscape = (e) => {
+      if (e.key === 'Escape') setSettingsOpen(false)
+    }
+
+    window.addEventListener('keydown', handleEscape)
+    return () => window.removeEventListener('keydown', handleEscape)
+  }, [settingsOpen])
 
   const handleSwap = () => {
     if (sourceLang === 'Auto-detect') return
@@ -302,6 +341,12 @@ export default function App() {
   const handleModelModeChange = (nextMode) => {
     setModelMode(nextMode)
     queueInstantAutoSubmit()
+  }
+
+  const handleAutoTranslateChange = (e) => {
+    const nextEnabled = e.target.checked
+    setAutoTranslateEnabled(nextEnabled)
+    if (nextEnabled) setInstantAutoSubmitVersion((version) => version + 1)
   }
 
   const handleManualTranslate = () => {
@@ -399,38 +444,113 @@ export default function App() {
         </div>
 
         <div className="topbar-controls">
-          <div className="mode-switcher" role="radiogroup" aria-label={t.modelModeLabel || 'Model mode'}>
-            {MODEL_MODES.map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                className={modelMode === mode ? 'is-active' : ''}
-                onClick={() => handleModelModeChange(mode)}
-                role="radio"
-                aria-checked={modelMode === mode}
-              >
-                {mode === 'fast' ? (t.fastMode || 'Fast') : (t.accurateMode || 'Accurate')}
-              </button>
-            ))}
-          </div>
-
-          <div className="locale-switcher">
-            <Icon name="globe" size={16} />
-            <select
-              value={locale}
-              onChange={(e) => changeLocale(e.target.value)}
-              className="locale-select"
-              aria-label={t.interfaceLanguage || 'Interface language'}
-            >
-              {UI_LOCALES.map(({ code, label }) => (
-                <option key={code} value={code}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </div>
+          <IconButton
+            className="settings-button"
+            label={t.settings || 'Settings'}
+            onClick={() => setSettingsOpen(true)}
+          >
+            <Icon name="settings" size={18} />
+          </IconButton>
         </div>
       </header>
+
+      {settingsOpen && (
+        <div
+          className="settings-overlay"
+          role="presentation"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setSettingsOpen(false)
+          }}
+        >
+          <aside
+            className="settings-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-title"
+          >
+            <div className="settings-header">
+              <div>
+                <h2 id="settings-title">{t.settings || 'Settings'}</h2>
+                <p>{t.settingsDescription || 'Translation and interface preferences'}</p>
+              </div>
+              <IconButton label={t.closeSettings || 'Close settings'} onClick={() => setSettingsOpen(false)}>
+                <Icon name="x" size={18} />
+              </IconButton>
+            </div>
+
+            <div className="settings-content">
+              <section className="setting-group">
+                <div className="setting-heading">
+                  <h3>{t.translationSettings || 'Translation'}</h3>
+                  <p>{t.translationSettingsDescription || 'Control when translations run and which model they use.'}</p>
+                </div>
+
+                <label className="toggle-row">
+                  <span>
+                    <strong>{t.autoTranslateLabel || 'Auto-translate after edits'}</strong>
+                    <small>{t.autoTranslateDescription || 'Translate automatically after text, tone, or language changes.'}</small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={autoTranslateEnabled}
+                    onChange={handleAutoTranslateChange}
+                  />
+                  <span className="toggle-control" aria-hidden="true" />
+                </label>
+
+                <div className="setting-field">
+                  <div className="setting-label">
+                    <span>{t.modelModeLabel || 'Model mode'}</span>
+                    <small>{t.modelModeDescription || 'Fast is quicker; accurate is better for nuance.'}</small>
+                  </div>
+                  <div className="mode-switcher settings-mode-switcher" role="radiogroup" aria-label={t.modelModeLabel || 'Model mode'}>
+                    {MODEL_MODES.map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        className={modelMode === mode ? 'is-active' : ''}
+                        onClick={() => handleModelModeChange(mode)}
+                        role="radio"
+                        aria-checked={modelMode === mode}
+                      >
+                        {mode === 'fast' ? (t.fastMode || 'Fast') : (t.accurateMode || 'Accurate')}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </section>
+
+              <section className="setting-group">
+                <div className="setting-heading">
+                  <h3>{t.interfaceSettings || 'Interface'}</h3>
+                  <p>{t.interfaceSettingsDescription || 'Choose the language for app controls.'}</p>
+                </div>
+
+                <div className="setting-field">
+                  <div className="setting-label">
+                    <span>{t.interfaceLanguage || 'Interface language'}</span>
+                  </div>
+                  <div className="locale-switcher settings-locale-switcher">
+                    <Icon name="globe" size={16} />
+                    <select
+                      value={locale}
+                      onChange={(e) => changeLocale(e.target.value)}
+                      className="locale-select"
+                      aria-label={t.interfaceLanguage || 'Interface language'}
+                    >
+                      {UI_LOCALES.map(({ code, label }) => (
+                        <option key={code} value={code}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </aside>
+        </div>
+      )}
 
       <main className="workspace">
         <section className="language-bar" aria-label={t.languageControls || 'Language controls'}>

@@ -387,6 +387,22 @@ button {
   overflow: hidden;
 }
 
+.app-mode-bar {
+  display: flex;
+  justify-content: center;
+  padding: 12px 14px;
+  background: var(--panel-3);
+  border-bottom: 1px solid var(--line);
+}
+
+.app-mode-switcher {
+  width: min(100%, 360px);
+}
+
+.app-mode-switcher button {
+  min-width: 0;
+}
+
 .language-bar {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 44px minmax(0, 1fr);
@@ -403,7 +419,9 @@ button {
 }
 
 .language-picker label,
-.tone-panel label {
+.tone-panel label,
+.participant-panel > label,
+.conversation-context > label {
   color: var(--muted);
   font-size: 0.72rem;
   font-weight: 800;
@@ -414,6 +432,7 @@ button {
 
 .language-select,
 .custom-language,
+.participant-input,
 .tone-input {
   width: 100%;
   min-height: 44px;
@@ -439,11 +458,13 @@ button {
 }
 
 .custom-language,
+.participant-input,
 .tone-input {
   padding: 0 13px;
 }
 
 .custom-language::placeholder,
+.participant-input::placeholder,
 .tone-input::placeholder,
 .text-area::placeholder {
   color: var(--muted);
@@ -452,6 +473,7 @@ button {
 
 .language-select:focus,
 .custom-language:focus,
+.participant-input:focus,
 .tone-input:focus,
 .text-area:focus {
   background-color: #111722;
@@ -514,6 +536,37 @@ button {
   padding: 14px;
   background: var(--panel-2);
   border-bottom: 1px solid var(--line);
+}
+
+.conversation-participants {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  padding: 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.participant-panel {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.conversation-context {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.context-area {
+  min-height: 140px;
+}
+
+.conversation-grid {
+  min-height: 360px;
 }
 
 .editor-grid {
@@ -756,6 +809,7 @@ button {
 
 [dir="rtl"] .text-area,
 [dir="rtl"] .tone-input,
+[dir="rtl"] .participant-input,
 [dir="rtl"] .custom-language {
   direction: rtl;
   text-align: right;
@@ -790,6 +844,10 @@ button {
   }
 
   .language-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .conversation-participants {
     grid-template-columns: 1fr;
   }
 

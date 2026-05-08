@@ -1,6 +1,7 @@
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
+import { fileURLToPath } from 'url'
 // import { OpenRouter } from '@openrouter/sdk'
 
 const app = express()
@@ -13,7 +14,7 @@ const OPENROUTER_MODELS = {
 const DEFAULT_MODEL_MODE = 'fast'
 const REQUEST_TIMEOUT_MS = 30000
 const MAX_TEXT_LENGTH = 12000
-const MAX_FIELD_LENGTH = 256
+const MAX_FIELD_LENGTH = 1024
 const BLOCKED_TRANSLATION_ERROR =
   'This text was not translated because it appears to request serious harm, illegal activity, or hate.'
 const UNTRANSLATABLE_ERROR =
@@ -41,20 +42,84 @@ app.use((err, req, res, next) => {
 function parseModelResponse(content) {
   const trimmed = String(content || '').trim()
 
+  const parseJson = (jsonText) => {
+    try {
+      return JSON.parse(jsonText)
+    } catch {
+      return JSON.parse(escapeJsonStringControlChars(jsonText))
+    }
+  }
+
   try {
-    return JSON.parse(trimmed)
+    return parseJson(trimmed)
   } catch {
     const start = trimmed.indexOf('{')
     const end = trimmed.lastIndexOf('}')
     if (start !== -1 && end > start) {
       try {
-        return JSON.parse(trimmed.slice(start, end + 1))
+        return parseJson(trimmed.slice(start, end + 1))
       } catch {
         throw new ProviderResponseError('Translation provider returned malformed JSON content.')
       }
     }
     throw new ProviderResponseError('Translation provider returned non-JSON content.')
   }
+}
+
+function escapeJsonStringControlChars(jsonText) {
+  let escaped = ''
+  let inString = false
+  let isEscaped = false
+
+  for (const char of jsonText) {
+    if (!inString) {
+      escaped += char
+      if (char === '"') inString = true
+      continue
+    }
+
+    if (isEscaped) {
+      escaped += char
+      isEscaped = false
+      continue
+    }
+
+    if (char === '\\') {
+      escaped += char
+      isEscaped = true
+      continue
+    }
+
+    if (char === '"') {
+      escaped += char
+      inString = false
+      continue
+    }
+
+    if (char === '\n') {
+      escaped += '\\n'
+      continue
+    }
+
+    if (char === '\r') {
+      escaped += '\\r'
+      continue
+    }
+
+    if (char === '\t') {
+      escaped += '\\t'
+      continue
+    }
+
+    if (char < ' ') {
+      escaped += `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`
+      continue
+    }
+
+    escaped += char
+  }
+
+  return escaped
 }
 
 function getProviderMessage(data) {
@@ -66,18 +131,64 @@ function cleanField(value) {
 }
 
 function validateTranslateBody(body) {
+  const mode = cleanField(body?.mode) || 'standard'
   const text = typeof body?.text === 'string' ? body.text : ''
   const targetLanguage = cleanField(body?.targetLanguage)
   const sourceLanguage = cleanField(body?.sourceLanguage) || 'Auto-detect'
   const tone = cleanField(body?.tone)
   const modelMode = cleanField(body?.modelMode) || DEFAULT_MODEL_MODE
 
-  if (!text.trim() || !targetLanguage) {
-    return { error: 'Missing required fields: text, targetLanguage' }
+  if (!['standard', 'conversation'].includes(mode)) {
+    return { error: 'Invalid translation mode.' }
   }
 
   if (!OPENROUTER_MODELS[modelMode]) {
     return { error: 'Invalid model mode.' }
+  }
+
+  if (mode === 'conversation') {
+    const userName = cleanField(body?.userName) || 'You'
+    const userLanguage = cleanField(body?.userLanguage)
+    const otherName = cleanField(body?.otherName) || 'Other participant'
+    const otherLanguage = cleanField(body?.otherLanguage)
+    const conversationContext = typeof body?.conversationContext === 'string'
+      ? body.conversationContext
+      : ''
+    const replyText = typeof body?.replyText === 'string' ? body.replyText : text
+
+    if (!replyText.trim() || !userLanguage || !otherLanguage) {
+      return { error: 'Missing required fields: replyText, userLanguage, otherLanguage' }
+    }
+
+    if (
+      replyText.length + conversationContext.length > MAX_TEXT_LENGTH ||
+      userName.length > MAX_FIELD_LENGTH ||
+      userLanguage.length > MAX_FIELD_LENGTH ||
+      otherName.length > MAX_FIELD_LENGTH ||
+      otherLanguage.length > MAX_FIELD_LENGTH ||
+      tone.length > MAX_FIELD_LENGTH ||
+      modelMode.length > MAX_FIELD_LENGTH
+    ) {
+      return { error: 'Request is too large.' }
+    }
+
+    return {
+      mode,
+      text: replyText,
+      sourceLanguage: userLanguage,
+      targetLanguage: otherLanguage,
+      tone,
+      modelMode,
+      userName,
+      userLanguage,
+      otherName,
+      otherLanguage,
+      conversationContext,
+    }
+  }
+
+  if (!text.trim() || !targetLanguage) {
+    return { error: 'Missing required fields: text, targetLanguage' }
   }
 
   if (
@@ -90,7 +201,7 @@ function validateTranslateBody(body) {
     return { error: 'Request is too large.' }
   }
 
-  return { text, sourceLanguage, targetLanguage, tone, modelMode }
+  return { mode, text, sourceLanguage, targetLanguage, tone, modelMode }
 }
 
 async function readResponseJson(response) {
@@ -147,6 +258,74 @@ Use exactly one of these shapes:
   ]
 }
 
+function buildConversationMessages({
+  text,
+  userName,
+  userLanguage,
+  otherName,
+  otherLanguage,
+  conversationContext,
+  tone,
+}) {
+  const toneInstruction = tone
+    ? `Use this tone/style unless the conversation context clearly calls for a more natural equivalent: ${tone}.`
+    : 'Match the natural tone, politeness, and formality implied by the draft and conversation context.'
+
+  const contextText = conversationContext.trim()
+    ? conversationContext
+    : '(No pasted conversation context was provided.)'
+
+  const systemPrompt = `You are a professional conversation translator with a narrow safety gate.
+
+The user is copy/pasting between another app and this translator. This is not a live chat.
+
+Participants:
+- ${userName} writes in ${userLanguage}
+- ${otherName} writes in ${otherLanguage}
+
+Translate ONLY ${userName}'s draft reply into ${otherLanguage}. Use the pasted conversation context to resolve names, pronouns, direct address, relationship, politeness, register, implied subjects, and language-specific habits such as naturally using a person's name or honorifics. Do not answer the conversation, summarize it, or translate the pasted context.
+
+${toneInstruction}
+
+Block only extreme content. Vulgarity, profanity, insults, adult language, disturbing fiction, political opinions, and offensive wording should usually still be translated.
+
+Return a blocked response only when the draft reply clearly:
+- asks for instructions, plans, or assistance to commit serious illegal activity or violent harm
+- promotes, praises, or incites hate, dehumanization, harassment, or violence against a protected class
+- contains sexual content involving minors
+- threatens specific real-world violence or celebrates severe harm
+
+Return an untranslatable response when the draft reply or request cannot be translated in a meaningful way, such as total gibberish, no linguistic content, contradictory or impossible language parameters, or an unclear custom language.
+
+Return ONLY valid JSON. The status must be exactly one of: translated, blocked, untranslatable.
+
+Use exactly one of these shapes:
+{"status":"translated","translation":"translated reply here"}
+{"status":"blocked","reason":"brief reason"}
+{"status":"untranslatable","reason":"brief reason"}`
+
+  return [
+    {
+      role: 'system',
+      content: systemPrompt,
+    },
+    {
+      role: 'user',
+      content: `Pasted conversation context:
+${contextText}
+
+Draft reply from ${userName} in ${userLanguage}:
+${text}`,
+    },
+  ]
+}
+
+function buildRequestMessages(validation) {
+  return validation.mode === 'conversation'
+    ? buildConversationMessages(validation)
+    : buildMessages(validation)
+}
+
 // const client = new OpenRouter({
 //   apiKey: process.env.OPENROUTER_API_KEY,
 // })
@@ -180,7 +359,7 @@ app.post('/api/translate', async (req, res) => {
     }
     const payload = {
       model: OPENROUTER_MODELS[validation.modelMode],
-      messages: buildMessages(validation),
+      messages: buildRequestMessages(validation),
       temperature: 0.2,
     }
 
@@ -243,6 +422,10 @@ app.post('/api/translate', async (req, res) => {
 app.use(express.static('dist'));
 app.get('*', (req, res) => res.sendFile('index.html', { root: 'dist' }));
 
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`)
-})
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`)
+  })
+}
+
+export { parseModelResponse, escapeJsonStringControlChars }

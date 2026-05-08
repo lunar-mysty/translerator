@@ -16,6 +16,7 @@ function loadSaved() {
 const MAX_GROW_HEIGHT = 500
 const AUTO_TRANSLATE_DELAY = 1000
 const MODEL_MODES = ['fast', 'accurate']
+const APP_MODES = ['standard', 'conversation']
 
 function useAutoResize(value) {
   const ref = useRef(null)
@@ -155,12 +156,22 @@ function IconButton({ label, onClick, children, className = '', disabled = false
 export default function App() {
   const { locale, changeLocale, t } = useI18n()
   const saved = useRef(loadSaved()).current
+  const [appMode, setAppMode] = useState(APP_MODES.includes(saved.appMode) ? saved.appMode : 'standard')
   const [sourceText, setSourceText] = useState(saved.sourceText || '')
   const [translatedText, setTranslatedText] = useState(saved.translatedText || '')
   const [sourceLang, setSourceLang] = useState(saved.sourceLang || 'Auto-detect')
   const [targetLang, setTargetLang] = useState(saved.targetLang || 'Spanish')
   const [customSourceLang, setCustomSourceLang] = useState(saved.customSourceLang || '')
   const [customTargetLang, setCustomTargetLang] = useState(saved.customTargetLang || '')
+  const [conversationUserName, setConversationUserName] = useState(saved.conversationUserName || '')
+  const [conversationUserLang, setConversationUserLang] = useState(saved.conversationUserLang || 'English')
+  const [conversationCustomUserLang, setConversationCustomUserLang] = useState(saved.conversationCustomUserLang || '')
+  const [conversationOtherName, setConversationOtherName] = useState(saved.conversationOtherName || '')
+  const [conversationOtherLang, setConversationOtherLang] = useState(saved.conversationOtherLang || 'Japanese')
+  const [conversationCustomOtherLang, setConversationCustomOtherLang] = useState(saved.conversationCustomOtherLang || '')
+  const [conversationContext, setConversationContext] = useState(saved.conversationContext || '')
+  const [conversationReply, setConversationReply] = useState(saved.conversationReply || '')
+  const [conversationTranslatedText, setConversationTranslatedText] = useState(saved.conversationTranslatedText || '')
   const [tone, setTone] = useState(saved.tone || '')
   const [modelMode, setModelMode] = useState(
     MODEL_MODES.includes(saved.modelMode) ? saved.modelMode : 'fast'
@@ -171,6 +182,7 @@ export default function App() {
   const [error, setError] = useState('')
   const [copiedSource, setCopiedSource] = useState(false)
   const [copiedTarget, setCopiedTarget] = useState(false)
+  const [copiedConversationOutput, setCopiedConversationOutput] = useState(false)
   const [debouncedAutoSubmitVersion, setDebouncedAutoSubmitVersion] = useState(0)
   const [instantAutoSubmitVersion, setInstantAutoSubmitVersion] = useState(0)
   const autoTranslateTimerRef = useRef(null)
@@ -179,6 +191,9 @@ export default function App() {
 
   const sourceRef = useAutoResize(sourceText)
   const targetRef = useAutoResize(translatedText)
+  const conversationContextRef = useAutoResize(conversationContext)
+  const conversationReplyRef = useAutoResize(conversationReply)
+  const conversationOutputRef = useAutoResize(conversationTranslatedText)
 
   const clearPendingAutoTranslate = useCallback(() => {
     if (autoTranslateTimerRef.current) {
@@ -189,18 +204,87 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      sourceText, translatedText, sourceLang, targetLang, customSourceLang, customTargetLang, tone, modelMode, autoTranslateEnabled,
+      appMode,
+      sourceText,
+      translatedText,
+      sourceLang,
+      targetLang,
+      customSourceLang,
+      customTargetLang,
+      conversationUserName,
+      conversationUserLang,
+      conversationCustomUserLang,
+      conversationOtherName,
+      conversationOtherLang,
+      conversationCustomOtherLang,
+      conversationContext,
+      conversationReply,
+      conversationTranslatedText,
+      tone,
+      modelMode,
+      autoTranslateEnabled,
     }))
-  }, [sourceText, translatedText, sourceLang, targetLang, customSourceLang, customTargetLang, tone, modelMode, autoTranslateEnabled])
+  }, [
+    appMode,
+    sourceText,
+    translatedText,
+    sourceLang,
+    targetLang,
+    customSourceLang,
+    customTargetLang,
+    conversationUserName,
+    conversationUserLang,
+    conversationCustomUserLang,
+    conversationOtherName,
+    conversationOtherLang,
+    conversationCustomOtherLang,
+    conversationContext,
+    conversationReply,
+    conversationTranslatedText,
+    tone,
+    modelMode,
+    autoTranslateEnabled,
+  ])
 
   const resolvedSourceLang = sourceLang === CUSTOM ? customSourceLang.trim() : sourceLang
   const resolvedTargetLang = targetLang === CUSTOM ? customTargetLang.trim() : targetLang
+  const resolvedConversationUserLang = conversationUserLang === CUSTOM
+    ? conversationCustomUserLang.trim()
+    : conversationUserLang
+  const resolvedConversationOtherLang = conversationOtherLang === CUSTOM
+    ? conversationCustomOtherLang.trim()
+    : conversationOtherLang
+
+  const submitTranslationPayload = useCallback(async (payload) => {
+    const res = await fetch('/api/translate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+
+    const data = await res.json()
+    if (!res.ok) {
+      if (data.rejected) {
+        const rejectionMessages = {
+          safety: t.blockedTranslation,
+          untranslatable: t.untranslatableTranslation,
+        }
+
+        throw new Error(rejectionMessages[data.rejectionType] || data.error || 'Translation failed')
+      }
+
+      throw new Error(data.error || 'Translation failed')
+    }
+
+    return data.translation
+  }, [t])
 
   const translate = useCallback(async ({ dedupe = false } = {}) => {
     if (!sourceText.trim()) return
     if (targetLang === CUSTOM && !customTargetLang.trim()) return
 
     const payload = {
+      mode: 'standard',
       text: sourceText,
       sourceLanguage: resolvedSourceLang || 'Auto-detect',
       targetLanguage: resolvedTargetLang,
@@ -217,32 +301,54 @@ export default function App() {
     setTranslatedText('')
 
     try {
-      const res = await fetch('/api/translate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-
-      const data = await res.json()
-      if (!res.ok) {
-        if (data.rejected) {
-          const rejectionMessages = {
-            safety: t.blockedTranslation,
-            untranslatable: t.untranslatableTranslation,
-          }
-
-          throw new Error(rejectionMessages[data.rejectionType] || data.error || 'Translation failed')
-        }
-
-        throw new Error(data.error || 'Translation failed')
-      }
-      setTranslatedText(data.translation)
+      setTranslatedText(await submitTranslationPayload(payload))
     } catch (err) {
       setError(err.message)
     } finally {
       setLoading(false)
     }
-  }, [sourceText, resolvedSourceLang, resolvedTargetLang, tone, modelMode, targetLang, customTargetLang, t])
+  }, [sourceText, resolvedSourceLang, resolvedTargetLang, tone, modelMode, targetLang, customTargetLang, submitTranslationPayload])
+
+  const translateConversation = useCallback(async () => {
+    if (!conversationReply.trim()) return
+    if (!resolvedConversationUserLang || !resolvedConversationOtherLang) return
+
+    clearPendingAutoTranslate()
+    setLoading(true)
+    setError('')
+    setConversationTranslatedText('')
+
+    try {
+      const payload = {
+        mode: 'conversation',
+        userName: conversationUserName.trim() || undefined,
+        userLanguage: resolvedConversationUserLang,
+        otherName: conversationOtherName.trim() || undefined,
+        otherLanguage: resolvedConversationOtherLang,
+        conversationContext,
+        replyText: conversationReply,
+        tone: tone.trim() || undefined,
+        modelMode,
+      }
+
+      setConversationTranslatedText(await submitTranslationPayload(payload))
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [
+    conversationReply,
+    resolvedConversationUserLang,
+    resolvedConversationOtherLang,
+    clearPendingAutoTranslate,
+    conversationUserName,
+    conversationOtherName,
+    conversationContext,
+    tone,
+    modelMode,
+    submitTranslationPayload,
+  ])
 
   useEffect(() => {
     latestTranslateRef.current = translate
@@ -340,17 +446,27 @@ export default function App() {
 
   const handleModelModeChange = (nextMode) => {
     setModelMode(nextMode)
-    queueInstantAutoSubmit()
+    if (appMode === 'standard') queueInstantAutoSubmit()
   }
 
   const handleAutoTranslateChange = (e) => {
     const nextEnabled = e.target.checked
     setAutoTranslateEnabled(nextEnabled)
-    if (nextEnabled) setInstantAutoSubmitVersion((version) => version + 1)
+    if (nextEnabled && appMode === 'standard') setInstantAutoSubmitVersion((version) => version + 1)
+  }
+
+  const handleAppModeChange = (nextMode) => {
+    clearPendingAutoTranslate()
+    setAppMode(nextMode)
+    setError('')
   }
 
   const handleManualTranslate = () => {
     clearPendingAutoTranslate()
+    if (appMode === 'conversation') {
+      translateConversation()
+      return
+    }
     translate()
   }
 
@@ -385,7 +501,9 @@ export default function App() {
   const displaySelectedLang = (lang, customValue) =>
     lang === CUSTOM ? (customValue.trim() || displayLang(lang)) : displayLang(lang)
 
-  const canTranslate = Boolean(!loading && sourceText.trim() && (targetLang !== CUSTOM || customTargetLang.trim()))
+  const canTranslate = appMode === 'conversation'
+    ? Boolean(!loading && conversationReply.trim() && resolvedConversationUserLang && resolvedConversationOtherLang)
+    : Boolean(!loading && sourceText.trim() && (targetLang !== CUSTOM || customTargetLang.trim()))
   const shortcutLabel =
     typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform || '')
       ? '⌘+⏎'
@@ -431,6 +549,45 @@ export default function App() {
       </div>
     )
   }
+
+  const conversationLanguagePicker = ({
+    id,
+    value,
+    setValue,
+    customValue,
+    setCustomValue,
+    label,
+  }) => (
+    <div className="language-picker">
+      <label htmlFor={id}>{label}</label>
+      <select
+        id={id}
+        value={value}
+        onChange={(e) => {
+          setValue(e.target.value)
+          setError('')
+        }}
+        className="language-select"
+      >
+        {TARGET_LANGUAGES.map((lang) => (
+          <option key={lang} value={lang}>
+            {displayLang(lang)}
+          </option>
+        ))}
+      </select>
+      {value === CUSTOM && (
+        <input
+          type="text"
+          className="custom-language"
+          placeholder={t.customLangPlaceholder || 'Type a language...'}
+          value={customValue}
+          onChange={(e) => setCustomValue(e.target.value)}
+          onKeyDown={handleKeyDown}
+          aria-label={label}
+        />
+      )}
+    </div>
+  )
 
   return (
     <div className="app">
@@ -553,6 +710,27 @@ export default function App() {
       )}
 
       <main className="workspace">
+        <section className="app-mode-bar" aria-label={t.translationMode || 'Translation mode'}>
+          <div className="mode-switcher app-mode-switcher" role="tablist" aria-label={t.translationMode || 'Translation mode'}>
+            {APP_MODES.map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                className={appMode === mode ? 'is-active' : ''}
+                onClick={() => handleAppModeChange(mode)}
+                role="tab"
+                aria-selected={appMode === mode}
+              >
+                {mode === 'standard'
+                  ? (t.standardMode || 'Standard')
+                  : (t.conversationMode || 'Conversation')}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {appMode === 'standard' ? (
+          <>
         <section className="language-bar" aria-label={t.languageControls || 'Language controls'}>
           {languagePicker('source')}
 
@@ -679,6 +857,157 @@ export default function App() {
             <span>{loading ? t.translating : t.translate}</span>
           </button>
         </div>
+          </>
+        ) : (
+          <>
+            <section className="conversation-participants">
+              <article className="participant-panel">
+                <label htmlFor="conversation-user-name">{t.youName || 'Your name'}</label>
+                <input
+                  id="conversation-user-name"
+                  type="text"
+                  className="participant-input"
+                  placeholder={t.youNamePlaceholder || 'e.g. Mysty'}
+                  value={conversationUserName}
+                  onChange={(e) => setConversationUserName(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                />
+                {conversationLanguagePicker({
+                  id: 'conversation-user-language',
+                  value: conversationUserLang,
+                  setValue: setConversationUserLang,
+                  customValue: conversationCustomUserLang,
+                  setCustomValue: setConversationCustomUserLang,
+                  label: t.yourLanguage || 'Your language',
+                })}
+              </article>
+
+              <article className="participant-panel">
+                <label htmlFor="conversation-other-name">{t.otherName || 'Their name'}</label>
+                <input
+                  id="conversation-other-name"
+                  type="text"
+                  className="participant-input"
+                  placeholder={t.otherNamePlaceholder || 'e.g. Haru'}
+                  value={conversationOtherName}
+                  onChange={(e) => setConversationOtherName(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                />
+                {conversationLanguagePicker({
+                  id: 'conversation-other-language',
+                  value: conversationOtherLang,
+                  setValue: setConversationOtherLang,
+                  customValue: conversationCustomOtherLang,
+                  setCustomValue: setConversationCustomOtherLang,
+                  label: t.theirLanguage || 'Their language',
+                })}
+              </article>
+            </section>
+
+            <section className="conversation-context">
+              <label htmlFor="conversation-context">{t.conversationContext || 'Conversation context'}</label>
+              <textarea
+                ref={conversationContextRef}
+                id="conversation-context"
+                className="text-area auto-grow context-area"
+                placeholder={t.conversationContextPlaceholder || 'Paste what the other person said, plus any recent messages that matter...'}
+                value={conversationContext}
+                onChange={(e) => setConversationContext(e.target.value)}
+                onKeyDown={handleKeyDown}
+              />
+            </section>
+
+            <section className="editor-grid conversation-grid">
+              <article className="editor-pane">
+                <div className="pane-toolbar">
+                  <div>
+                    <h2>{t.yourReply || 'Your reply'}</h2>
+                    <p>{displaySelectedLang(conversationUserLang, conversationCustomUserLang)}</p>
+                  </div>
+                  <div className="pane-actions">
+                    <span>{conversationReply.length}</span>
+                    {conversationReply && (
+                      <IconButton
+                        className="danger-button"
+                        label={t.clear}
+                        onClick={() => {
+                          setConversationReply('')
+                          setConversationTranslatedText('')
+                          setError('')
+                        }}
+                      >
+                        <Icon name="clear" size={16} />
+                      </IconButton>
+                    )}
+                  </div>
+                </div>
+
+                <textarea
+                  ref={conversationReplyRef}
+                  className="text-area auto-grow"
+                  placeholder={t.yourReplyPlaceholder || 'Type what you want to say...'}
+                  value={conversationReply}
+                  onChange={(e) => setConversationReply(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  aria-label={t.yourReply || 'Your reply'}
+                />
+              </article>
+
+              <article className="editor-pane output-pane">
+                <div className="pane-toolbar">
+                  <div>
+                    <h2>{t.translatedReply || 'Translated reply'}</h2>
+                    <p>{displaySelectedLang(conversationOtherLang, conversationCustomOtherLang)}</p>
+                  </div>
+                  <div className="pane-actions">
+                    <span>{conversationTranslatedText.length}</span>
+                    {conversationTranslatedText && (
+                      <IconButton
+                        label={t.copyTranslation}
+                        onClick={() => copyToClipboard(conversationTranslatedText, setCopiedConversationOutput)}
+                      >
+                        <Icon name={copiedConversationOutput ? 'check' : 'copy'} size={16} />
+                      </IconButton>
+                    )}
+                  </div>
+                </div>
+
+                {loading ? (
+                  <div className="text-area output-area loading-state" role="status" aria-live="polite">
+                    <span className="loader" aria-hidden="true" />
+                    <span>{t.translating}</span>
+                  </div>
+                ) : error ? (
+                  <div className="text-area output-area" role="alert">
+                    <p className="error-text">{error}</p>
+                  </div>
+                ) : (
+                  <textarea
+                    ref={conversationOutputRef}
+                    className="text-area auto-grow"
+                    placeholder={t.translatedReplyPlaceholder || 'The translated reply will appear here...'}
+                    value={conversationTranslatedText}
+                    onChange={(e) => setConversationTranslatedText(e.target.value)}
+                    aria-label={t.translatedReply || 'Translated reply'}
+                  />
+                )}
+              </article>
+            </section>
+
+            <div className="action-bar">
+              <p className="shortcut-hint">{shortcutHint}</p>
+              <button
+                type="button"
+                className="translate-button"
+                onClick={handleManualTranslate}
+                disabled={!canTranslate}
+              >
+                <Icon name="send" size={18} />
+                <span>{loading ? t.translating : (t.translateReply || 'Translate reply')}</span>
+              </button>
+            </div>
+          </>
+        )}
       </main>
 
       <footer className="footer">

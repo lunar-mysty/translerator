@@ -302,6 +302,14 @@ function Icon({ name, size = 18 }) {
         <circle cx="12" cy="12" r="3" />
       </svg>
     ),
+    ticket: (
+      <svg {...common}>
+        <path d="M2 9a3 3 0 0 0 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 0 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v2Z" />
+        <path d="M13 5v2" />
+        <path d="M13 17v2" />
+        <path d="M13 11v2" />
+      </svg>
+    ),
     send: (
       <svg {...common}>
         <path d="M22 2 11 13" />
@@ -370,6 +378,9 @@ export default function App() {
   const [modelMode, setModelMode] = useState(normalizeModelMode(saved.modelMode))
   const [rateLimitStatuses, setRateLimitStatuses] = useState({})
   const [quotaClock, setQuotaClock] = useState(Date.now())
+  const [creditCode, setCreditCode] = useState('')
+  const [creditCodeLoading, setCreditCodeLoading] = useState(false)
+  const [creditCodeStatus, setCreditCodeStatus] = useState(null)
   const [autoTranslateEnabled, setAutoTranslateEnabled] = useState(saved.autoTranslateEnabled !== false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -704,6 +715,40 @@ export default function App() {
     if (nextEnabled && appMode === 'standard') setInstantAutoSubmitVersion((version) => version + 1)
   }
 
+  const handleCreditCodeRedeem = async (e) => {
+    e.preventDefault()
+    const code = creditCode.trim()
+    if (!code || creditCodeLoading) return
+
+    setCreditCodeLoading(true)
+    setCreditCodeStatus(null)
+
+    try {
+      const res = await fetch('/api/credit-codes/redeem', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, clientIdentity: getClientIdentity() }),
+      })
+      const data = await res.json()
+
+      if (!res.ok) throw new Error(data.error || 'Credit code could not be redeemed.')
+      if (data.rateLimits) setRateLimitStatuses(data.rateLimits)
+
+      setCreditCode('')
+      setCreditCodeStatus({
+        type: 'success',
+        text: data.message || t.creditCodeRedeemed || 'Credit code redeemed.',
+      })
+    } catch (err) {
+      setCreditCodeStatus({
+        type: 'error',
+        text: err.message || t.creditCodeRedeemFailed || 'Credit code could not be redeemed.',
+      })
+    } finally {
+      setCreditCodeLoading(false)
+    }
+  }
+
   const handleAppModeChange = (nextMode) => {
     clearPendingAutoTranslate()
     setAppMode(nextMode)
@@ -1009,8 +1054,9 @@ export default function App() {
                     {MODEL_MODES.map((mode) => {
                       const details = MODEL_MODE_DETAILS[mode]
                       const usage = getModeUsage(mode)
-                      const usageSuffix = (t.modelUsageSuffix || 'of {limit} left in 24h')
-                        .replace('{limit}', usage.limit)
+                      const usageSuffix = usage.remaining > usage.limit
+                        ? (t.modelBonusUsageSuffix || 'left with credit bonus')
+                        : (t.modelUsageSuffix || 'of {limit} left in 24h').replace('{limit}', usage.limit)
 
                       return (
                         <button
@@ -1035,6 +1081,39 @@ export default function App() {
                     })}
                   </div>
                 </div>
+
+                <form className="setting-field credit-code-form" onSubmit={handleCreditCodeRedeem}>
+                  <div className="setting-label">
+                    <span>{t.creditCodeLabel || 'Credit code'}</span>
+                    <small>{t.creditCodeDescription || 'Redeem credits for any model mode included in the code.'}</small>
+                  </div>
+                  <div className="credit-code-controls">
+                    <input
+                      type="text"
+                      value={creditCode}
+                      onChange={(e) => {
+                        setCreditCode(e.target.value)
+                        setCreditCodeStatus(null)
+                      }}
+                      placeholder={t.creditCodePlaceholder || 'Enter code'}
+                      autoCapitalize="characters"
+                      spellCheck={false}
+                      aria-label={t.creditCodeLabel || 'Credit code'}
+                    />
+                    <button
+                      type="submit"
+                      disabled={creditCodeLoading || !creditCode.trim()}
+                    >
+                      <Icon name="ticket" size={16} />
+                      <span>{creditCodeLoading ? (t.redeemingCreditCode || 'Redeeming...') : (t.redeemCreditCode || 'Redeem')}</span>
+                    </button>
+                  </div>
+                  {creditCodeStatus && (
+                    <p className={`credit-code-status is-${creditCodeStatus.type}`} role={creditCodeStatus.type === 'error' ? 'alert' : 'status'}>
+                      {creditCodeStatus.text}
+                    </p>
+                  )}
+                </form>
               </section>
 
               <section className="setting-group">

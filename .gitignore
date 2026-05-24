@@ -5,3 +5,4 @@ dist
 .playwright-mcp
 .maestri
 data/request-limits.json
+data/credit-codes.json

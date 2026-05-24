@@ -3,6 +3,9 @@ import { useI18n, UI_LOCALES, languageNames } from './i18n.jsx'
 import { APP_VERSION } from './version.js'
 
 const STORAGE_KEY = 'translerator-state'
+const CLIENT_ID_STORAGE_KEY = 'translerator-client-id'
+const HARDWARE_ID_STORAGE_KEY = 'translerator-hardware-id'
+const CLIENT_ID_COOKIE_NAME = 'translerator_client_id'
 
 function loadSaved() {
   try {
@@ -15,8 +18,194 @@ function loadSaved() {
 
 const MAX_GROW_HEIGHT = 500
 const AUTO_TRANSLATE_DELAY = 1000
-const MODEL_MODES = ['fast', 'accurate']
+const MODEL_MODES = ['fast', 'precise', 'super']
+const MODEL_MODE_ALIASES = {
+  accurate: 'precise',
+}
+const MODEL_MODE_DETAILS = {
+  fast: {
+    labelKey: 'fastMode',
+    fallbackLabel: 'Fast',
+    model: 'Claude Haiku 4.5',
+    limit: 100,
+  },
+  precise: {
+    labelKey: 'preciseMode',
+    fallbackLabel: 'Precise',
+    model: 'Claude Sonnet 4.6',
+    limit: 50,
+  },
+  super: {
+    labelKey: 'superMode',
+    fallbackLabel: 'Super',
+    model: 'Claude Opus 4.7',
+    limit: 25,
+  },
+}
 const APP_MODES = ['standard', 'conversation']
+const CONVERSATION_SIDES = ['user', 'other']
+const LONG_MESSAGE_CHAR_LIMIT = 420
+const LONG_MESSAGE_LINE_LIMIT = 8
+const LONG_MESSAGE_PREVIEW_HEIGHT = 168
+
+function createPersistentId(prefix) {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return `${prefix}-${crypto.randomUUID()}`
+  }
+
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`
+}
+
+function readCookie(name) {
+  if (typeof document === 'undefined') return ''
+  const cookie = document.cookie
+    .split(';')
+    .map((entry) => entry.trim())
+    .find((entry) => entry.startsWith(`${name}=`))
+
+  if (!cookie) return ''
+  try {
+    return decodeURIComponent(cookie.slice(name.length + 1))
+  } catch {
+    return cookie.slice(name.length + 1)
+  }
+}
+
+function writeCookie(name, value) {
+  if (typeof document === 'undefined') return
+  const maxAge = 60 * 60 * 24 * 365
+  document.cookie = `${encodeURIComponent(name)}=${encodeURIComponent(value)}; Max-Age=${maxAge}; Path=/; SameSite=Lax`
+}
+
+function loadPersistentId(storageKey, cookieName, prefix) {
+  const cookieValue = cookieName ? readCookie(cookieName) : ''
+
+  try {
+    const stored = localStorage.getItem(storageKey)
+    const id = stored || cookieValue || createPersistentId(prefix)
+    localStorage.setItem(storageKey, id)
+    if (cookieName) writeCookie(cookieName, id)
+    return id
+  } catch {
+    const id = cookieValue || createPersistentId(prefix)
+    if (cookieName) writeCookie(cookieName, id)
+    return id
+  }
+}
+
+function getClientIdentity() {
+  const clientId = loadPersistentId(CLIENT_ID_STORAGE_KEY, CLIENT_ID_COOKIE_NAME, 'client')
+  const hardwareId = loadPersistentId(HARDWARE_ID_STORAGE_KEY, '', 'hardware')
+  const nav = typeof navigator === 'undefined' ? {} : navigator
+  const screenInfo = typeof screen === 'undefined'
+    ? undefined
+    : {
+      width: screen.width,
+      height: screen.height,
+      availWidth: screen.availWidth,
+      availHeight: screen.availHeight,
+      colorDepth: screen.colorDepth,
+      pixelDepth: screen.pixelDepth,
+      devicePixelRatio: window.devicePixelRatio,
+    }
+
+  return {
+    clientId,
+    hardwareId,
+    userAgent: nav.userAgent,
+    platform: nav.platform,
+    vendor: nav.vendor,
+    language: nav.language,
+    languages: Array.isArray(nav.languages) ? nav.languages : undefined,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    hardwareConcurrency: nav.hardwareConcurrency,
+    deviceMemory: nav.deviceMemory,
+    maxTouchPoints: nav.maxTouchPoints,
+    cookieEnabled: nav.cookieEnabled,
+    doNotTrack: nav.doNotTrack,
+    screen: screenInfo,
+  }
+}
+
+function normalizeModelMode(mode) {
+  const normalized = MODEL_MODE_ALIASES[mode] || mode
+  return MODEL_MODES.includes(normalized) ? normalized : 'fast'
+}
+
+function getModelModeLabel(t, mode) {
+  const details = MODEL_MODE_DETAILS[mode]
+  return t[details.labelKey] || (mode === 'precise' ? t.accurateMode : '') || details.fallbackLabel
+}
+
+function formatQuotaReset(t, resetAt, now, template) {
+  if (!resetAt) return t.modelWindowStartsOnUse || 'window starts on first request'
+
+  const resetDate = new Date(resetAt)
+  if (Number.isNaN(resetDate.getTime())) return t.modelWindowActive || 'window active'
+
+  const msLeft = Math.max(0, resetDate.getTime() - now)
+  const totalMinutes = Math.ceil(msLeft / 60000)
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  const relative = hours > 0
+    ? `${hours}h ${minutes.toString().padStart(2, '0')}m`
+    : `${minutes}m`
+  const absolute = resetDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+
+  return (template || t.modelResetTemplate || 'resets in {timeLeft} at {resetTime}')
+    .replace('{timeLeft}', relative)
+    .replace('{resetTime}', absolute)
+}
+
+function createConversationMessage(side = 'user', text = '') {
+  const safeSide = CONVERSATION_SIDES.includes(side) ? side : 'user'
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    side: safeSide,
+    text,
+  }
+}
+
+function normalizeConversationMessages(saved) {
+  if (Array.isArray(saved.conversationMessages)) {
+    return saved.conversationMessages
+      .filter((message) => (
+        message &&
+        CONVERSATION_SIDES.includes(message.side) &&
+        typeof message.text === 'string'
+      ))
+      .map((message) => ({
+        id: String(message.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
+        side: message.side,
+        text: message.text,
+      }))
+  }
+
+  const legacyMessages = []
+  if (typeof saved.conversationContext === 'string' && saved.conversationContext.trim()) {
+    legacyMessages.push(createConversationMessage('other', saved.conversationContext))
+  }
+  if (typeof saved.conversationReply === 'string' && saved.conversationReply.trim()) {
+    legacyMessages.push(createConversationMessage('user', saved.conversationReply))
+  }
+
+  return legacyMessages
+}
+
+function isVeryLongConversationMessage(text) {
+  return text.length > LONG_MESSAGE_CHAR_LIMIT || text.split('\n').length > LONG_MESSAGE_LINE_LIMIT
+}
+
+function resizeMessageTextarea(el, collapsed) {
+  if (!el) return
+
+  el.style.height = 'auto'
+  const nextHeight = collapsed
+    ? Math.min(el.scrollHeight, LONG_MESSAGE_PREVIEW_HEIGHT)
+    : el.scrollHeight
+  el.style.height = nextHeight + 'px'
+  el.style.overflowY = collapsed ? 'hidden' : 'hidden'
+}
 
 function useAutoResize(value) {
   const ref = useRef(null)
@@ -169,13 +358,18 @@ export default function App() {
   const [conversationOtherName, setConversationOtherName] = useState(saved.conversationOtherName || '')
   const [conversationOtherLang, setConversationOtherLang] = useState(saved.conversationOtherLang || 'Japanese')
   const [conversationCustomOtherLang, setConversationCustomOtherLang] = useState(saved.conversationCustomOtherLang || '')
-  const [conversationContext, setConversationContext] = useState(saved.conversationContext || '')
-  const [conversationReply, setConversationReply] = useState(saved.conversationReply || '')
+  const [conversationMessages, setConversationMessages] = useState(() => normalizeConversationMessages(saved))
+  const [conversationDraftSide, setConversationDraftSide] = useState(
+    CONVERSATION_SIDES.includes(saved.conversationDraftSide) ? saved.conversationDraftSide : 'user'
+  )
+  const [conversationDraftText, setConversationDraftText] = useState('')
+  const [expandedConversationMessageIds, setExpandedConversationMessageIds] = useState(() => new Set())
+  const [lastConversationMessageId, setLastConversationMessageId] = useState(saved.lastConversationMessageId || '')
   const [conversationTranslatedText, setConversationTranslatedText] = useState(saved.conversationTranslatedText || '')
   const [tone, setTone] = useState(saved.tone || '')
-  const [modelMode, setModelMode] = useState(
-    MODEL_MODES.includes(saved.modelMode) ? saved.modelMode : 'fast'
-  )
+  const [modelMode, setModelMode] = useState(normalizeModelMode(saved.modelMode))
+  const [rateLimitStatuses, setRateLimitStatuses] = useState({})
+  const [quotaClock, setQuotaClock] = useState(Date.now())
   const [autoTranslateEnabled, setAutoTranslateEnabled] = useState(saved.autoTranslateEnabled !== false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -191,9 +385,7 @@ export default function App() {
 
   const sourceRef = useAutoResize(sourceText)
   const targetRef = useAutoResize(translatedText)
-  const conversationContextRef = useAutoResize(conversationContext)
-  const conversationReplyRef = useAutoResize(conversationReply)
-  const conversationOutputRef = useAutoResize(conversationTranslatedText)
+  const conversationDraftRef = useAutoResize(conversationDraftText)
 
   const clearPendingAutoTranslate = useCallback(() => {
     if (autoTranslateTimerRef.current) {
@@ -217,8 +409,9 @@ export default function App() {
       conversationOtherName,
       conversationOtherLang,
       conversationCustomOtherLang,
-      conversationContext,
-      conversationReply,
+      conversationMessages,
+      conversationDraftSide,
+      lastConversationMessageId,
       conversationTranslatedText,
       tone,
       modelMode,
@@ -238,8 +431,9 @@ export default function App() {
     conversationOtherName,
     conversationOtherLang,
     conversationCustomOtherLang,
-    conversationContext,
-    conversationReply,
+    conversationMessages,
+    conversationDraftSide,
+    lastConversationMessageId,
     conversationTranslatedText,
     tone,
     modelMode,
@@ -263,6 +457,12 @@ export default function App() {
     })
 
     const data = await res.json()
+    if (data.rateLimit) {
+      setRateLimitStatuses((statuses) => ({
+        ...statuses,
+        [data.rateLimit.mode]: data.rateLimit,
+      }))
+    }
     if (!res.ok) {
       if (data.rejected) {
         const rejectionMessages = {
@@ -273,11 +473,50 @@ export default function App() {
         throw new Error(rejectionMessages[data.rejectionType] || data.error || 'Translation failed')
       }
 
+      if (data.limitExceeded && data.rateLimit?.resetAt) {
+        throw new Error(
+          (t.limitReachedWithReset || '{mode} limit reached. Try again in {timeLeft} at {resetTime}.')
+            .replace('{mode}', data.rateLimit.label || getModelModeLabel(t, data.rateLimit.mode))
+            .replace(
+              '{timeLeft}',
+              formatQuotaReset(t, data.rateLimit.resetAt, Date.now(), '{timeLeft}')
+            )
+            .replace(
+              '{resetTime}',
+              formatQuotaReset(t, data.rateLimit.resetAt, Date.now(), '{resetTime}')
+            )
+        )
+      }
+
       throw new Error(data.error || 'Translation failed')
     }
 
     return data.translation
   }, [t])
+
+  useEffect(() => {
+    let canceled = false
+
+    fetch('/api/rate-limits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientIdentity: getClientIdentity() }),
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!canceled && data?.rateLimits) setRateLimitStatuses(data.rateLimits)
+      })
+      .catch(() => undefined)
+
+    return () => {
+      canceled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    const interval = setInterval(() => setQuotaClock(Date.now()), 60000)
+    return () => clearInterval(interval)
+  }, [])
 
   const translate = useCallback(async ({ dedupe = false } = {}) => {
     if (!sourceText.trim()) return
@@ -290,6 +529,7 @@ export default function App() {
       targetLanguage: resolvedTargetLang,
       tone: tone.trim() || undefined,
       modelMode,
+      clientIdentity: getClientIdentity(),
     }
     const payloadKey = JSON.stringify(payload)
 
@@ -310,7 +550,11 @@ export default function App() {
   }, [sourceText, resolvedSourceLang, resolvedTargetLang, tone, modelMode, targetLang, customTargetLang, submitTranslationPayload])
 
   const translateConversation = useCallback(async () => {
-    if (!conversationReply.trim()) return
+    const activeMessage =
+      conversationMessages.find((message) => message.id === lastConversationMessageId) ||
+      conversationMessages[conversationMessages.length - 1]
+
+    if (!activeMessage?.text.trim()) return
     if (!resolvedConversationUserLang || !resolvedConversationOtherLang) return
 
     clearPendingAutoTranslate()
@@ -325,10 +569,11 @@ export default function App() {
         userLanguage: resolvedConversationUserLang,
         otherName: conversationOtherName.trim() || undefined,
         otherLanguage: resolvedConversationOtherLang,
-        conversationContext,
-        replyText: conversationReply,
+        conversationMessages,
+        activeMessageId: activeMessage.id,
         tone: tone.trim() || undefined,
         modelMode,
+        clientIdentity: getClientIdentity(),
       }
 
       setConversationTranslatedText(await submitTranslationPayload(payload))
@@ -338,13 +583,13 @@ export default function App() {
       setLoading(false)
     }
   }, [
-    conversationReply,
+    conversationMessages,
+    lastConversationMessageId,
     resolvedConversationUserLang,
     resolvedConversationOtherLang,
     clearPendingAutoTranslate,
     conversationUserName,
     conversationOtherName,
-    conversationContext,
     tone,
     modelMode,
     submitTranslationPayload,
@@ -420,8 +665,12 @@ export default function App() {
     setTargetLang(prevSourceLang)
     setCustomSourceLang(prevCustomTarget)
     setCustomTargetLang(prevCustomSource)
-    setSourceText(translatedText)
-    setTranslatedText(sourceText)
+    if (translatedText.trim()) {
+      setSourceText(translatedText)
+      setTranslatedText(sourceText)
+    } else {
+      setTranslatedText('')
+    }
   }
 
   const handleSourceTextChange = (e) => {
@@ -461,6 +710,72 @@ export default function App() {
     setError('')
   }
 
+  const handleAddConversationMessage = () => {
+    const text = conversationDraftText.trim()
+    if (!text) return
+
+    const nextMessage = createConversationMessage(conversationDraftSide, text)
+    setConversationMessages((messages) => [...messages, nextMessage])
+    setLastConversationMessageId(nextMessage.id)
+    setConversationDraftText('')
+    setConversationTranslatedText('')
+    setError('')
+  }
+
+  const handleConversationMessageChange = (id, text) => {
+    setConversationMessages((messages) => messages.map((message) => (
+      message.id === id ? { ...message, text } : message
+    )))
+    if (id === lastConversationMessageId) setConversationTranslatedText('')
+    setError('')
+  }
+
+  const handleConversationSideChange = (id, side) => {
+    setConversationMessages((messages) => messages.map((message) => (
+      message.id === id ? { ...message, side } : message
+    )))
+    if (id === lastConversationMessageId) setConversationTranslatedText('')
+    setError('')
+  }
+
+  const handleToggleConversationMessageExpanded = (id) => {
+    setExpandedConversationMessageIds((expandedIds) => {
+      const nextExpandedIds = new Set(expandedIds)
+      if (nextExpandedIds.has(id)) {
+        nextExpandedIds.delete(id)
+      } else {
+        nextExpandedIds.add(id)
+      }
+      return nextExpandedIds
+    })
+  }
+
+  const handleRemoveConversationMessage = (id) => {
+    setConversationMessages((messages) => {
+      const nextMessages = messages.filter((message) => message.id !== id)
+      if (id === lastConversationMessageId) {
+        setLastConversationMessageId(nextMessages[nextMessages.length - 1]?.id || '')
+        setConversationTranslatedText('')
+      }
+      return nextMessages
+    })
+    setExpandedConversationMessageIds((expandedIds) => {
+      if (!expandedIds.has(id)) return expandedIds
+      const nextExpandedIds = new Set(expandedIds)
+      nextExpandedIds.delete(id)
+      return nextExpandedIds
+    })
+    setError('')
+  }
+
+  const handleClearConversation = () => {
+    setConversationMessages([])
+    setExpandedConversationMessageIds(new Set())
+    setLastConversationMessageId('')
+    setConversationTranslatedText('')
+    setError('')
+  }
+
   const handleManualTranslate = () => {
     clearPendingAutoTranslate()
     if (appMode === 'conversation') {
@@ -494,21 +809,51 @@ export default function App() {
     }
   }
 
-  const canSwap = sourceLang !== 'Auto-detect' && translatedText.trim()
+  const canSwap = sourceLang !== 'Auto-detect'
   const langMap = languageNames[locale] || languageNames.en
   const displayLang = (lang) =>
     lang === 'Auto-detect' ? t.autoDetect : lang === CUSTOM ? (t.custom || 'Custom') : (langMap[lang] || lang)
   const displaySelectedLang = (lang, customValue) =>
     lang === CUSTOM ? (customValue.trim() || displayLang(lang)) : displayLang(lang)
+  const activeConversationMessage =
+    conversationMessages.find((message) => message.id === lastConversationMessageId) ||
+    conversationMessages[conversationMessages.length - 1] ||
+    null
+  const activeConversationTargetDisplay = activeConversationMessage?.side === 'other'
+    ? displaySelectedLang(conversationUserLang, conversationCustomUserLang)
+    : displaySelectedLang(conversationOtherLang, conversationCustomOtherLang)
+  const activeConversationAuthor = activeConversationMessage?.side === 'other'
+    ? (conversationOtherName.trim() || t.otherSide || 'Other person')
+    : (conversationUserName.trim() || t.userSide || 'You')
+  const getConversationSideLabel = (side) => (
+    side === 'other'
+      ? (conversationOtherName.trim() || t.otherSide || 'Other person')
+      : (conversationUserName.trim() || t.userSide || 'You')
+  )
+  const getConversationSideLanguage = (side) => (
+    side === 'other'
+      ? displaySelectedLang(conversationOtherLang, conversationCustomOtherLang)
+      : displaySelectedLang(conversationUserLang, conversationCustomUserLang)
+  )
 
   const canTranslate = appMode === 'conversation'
-    ? Boolean(!loading && conversationReply.trim() && resolvedConversationUserLang && resolvedConversationOtherLang)
+    ? Boolean(!loading && activeConversationMessage?.text.trim() && resolvedConversationUserLang && resolvedConversationOtherLang)
     : Boolean(!loading && sourceText.trim() && (targetLang !== CUSTOM || customTargetLang.trim()))
   const shortcutLabel =
     typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform || '')
       ? '⌘+⏎'
       : 'Ctrl+⏎'
   const shortcutHint = (t.shortcutHint || 'Press {shortcut} to translate').replace('{shortcut}', shortcutLabel)
+  const getModeUsage = (mode) => {
+    const details = MODEL_MODE_DETAILS[mode]
+    const status = rateLimitStatuses[mode]
+
+    return {
+      remaining: typeof status?.remaining === 'number' ? status.remaining : details.limit,
+      limit: typeof status?.limit === 'number' ? status.limit : details.limit,
+      resetAt: status?.resetAt || '',
+    }
+  }
 
   const languagePicker = (kind) => {
     const isSource = kind === 'source'
@@ -658,21 +1003,36 @@ export default function App() {
                 <div className="setting-field">
                   <div className="setting-label">
                     <span>{t.modelModeLabel || 'Model mode'}</span>
-                    <small>{t.modelModeDescription || 'Fast is quicker; accurate is better for nuance.'}</small>
+                    <small>{t.modelModeDescription || 'Fast uses Haiku, Precise uses Sonnet, and Super uses Opus.'}</small>
                   </div>
-                  <div className="mode-switcher settings-mode-switcher" role="radiogroup" aria-label={t.modelModeLabel || 'Model mode'}>
-                    {MODEL_MODES.map((mode) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        className={modelMode === mode ? 'is-active' : ''}
-                        onClick={() => handleModelModeChange(mode)}
-                        role="radio"
-                        aria-checked={modelMode === mode}
-                      >
-                        {mode === 'fast' ? (t.fastMode || 'Fast') : (t.accurateMode || 'Accurate')}
-                      </button>
-                    ))}
+                  <div className="model-mode-details" role="radiogroup" aria-label={t.modelModeDetails || 'Model mode details'}>
+                    {MODEL_MODES.map((mode) => {
+                      const details = MODEL_MODE_DETAILS[mode]
+                      const usage = getModeUsage(mode)
+                      const usageSuffix = (t.modelUsageSuffix || 'of {limit} left in 24h')
+                        .replace('{limit}', usage.limit)
+
+                      return (
+                        <button
+                          key={mode}
+                          type="button"
+                          className={modelMode === mode ? 'is-active' : ''}
+                          onClick={() => handleModelModeChange(mode)}
+                          role="radio"
+                          aria-checked={modelMode === mode}
+                        >
+                          <span className="model-card-header">
+                            <strong>{getModelModeLabel(t, mode)}</strong>
+                            <span>{details.model}</span>
+                          </span>
+                          <span className="model-card-usage">
+                            <strong>{usage.remaining}</strong>
+                            <span>{usageSuffix}</span>
+                          </span>
+                          <span className="model-card-reset">{formatQuotaReset(t, usage.resetAt, quotaClock)}</span>
+                        </button>
+                      )
+                    })}
                   </div>
                 </div>
               </section>
@@ -867,7 +1227,7 @@ export default function App() {
                   id="conversation-user-name"
                   type="text"
                   className="participant-input"
-                  placeholder={t.youNamePlaceholder || 'e.g. Mysty'}
+                  placeholder={t.youNamePlaceholder || 'e.g. John Doe'}
                   value={conversationUserName}
                   onChange={(e) => setConversationUserName(e.target.value)}
                   onKeyDown={handleKeyDown}
@@ -888,7 +1248,7 @@ export default function App() {
                   id="conversation-other-name"
                   type="text"
                   className="participant-input"
-                  placeholder={t.otherNamePlaceholder || 'e.g. Haru'}
+                  placeholder={t.otherNamePlaceholder || 'e.g. Jane Doe'}
                   value={conversationOtherName}
                   onChange={(e) => setConversationOtherName(e.target.value)}
                   onKeyDown={handleKeyDown}
@@ -904,37 +1264,23 @@ export default function App() {
               </article>
             </section>
 
-            <section className="conversation-context">
-              <label htmlFor="conversation-context">{t.conversationContext || 'Conversation context'}</label>
-              <textarea
-                ref={conversationContextRef}
-                id="conversation-context"
-                className="text-area auto-grow context-area"
-                placeholder={t.conversationContextPlaceholder || 'Paste what the other person said, plus any recent messages that matter...'}
-                value={conversationContext}
-                onChange={(e) => setConversationContext(e.target.value)}
-                onKeyDown={handleKeyDown}
-              />
-            </section>
-
             <section className="editor-grid conversation-grid">
-              <article className="editor-pane">
+              <article className="editor-pane conversation-pane">
                 <div className="pane-toolbar">
                   <div>
-                    <h2>{t.yourReply || 'Your reply'}</h2>
-                    <p>{displaySelectedLang(conversationUserLang, conversationCustomUserLang)}</p>
+                    <h2>{t.conversationTranscript || 'Conversation'}</h2>
+                    <p>{activeConversationMessage
+                      ? `${activeConversationAuthor} -> ${activeConversationTargetDisplay}`
+                      : (t.noConversationMessages || 'Add messages from either side')}
+                    </p>
                   </div>
                   <div className="pane-actions">
-                    <span>{conversationReply.length}</span>
-                    {conversationReply && (
+                    <span>{conversationMessages.length}</span>
+                    {conversationMessages.length > 0 && (
                       <IconButton
                         className="danger-button"
                         label={t.clear}
-                        onClick={() => {
-                          setConversationReply('')
-                          setConversationTranslatedText('')
-                          setError('')
-                        }}
+                        onClick={handleClearConversation}
                       >
                         <Icon name="clear" size={16} />
                       </IconButton>
@@ -942,22 +1288,118 @@ export default function App() {
                   </div>
                 </div>
 
-                <textarea
-                  ref={conversationReplyRef}
-                  className="text-area auto-grow"
-                  placeholder={t.yourReplyPlaceholder || 'Type what you want to say...'}
-                  value={conversationReply}
-                  onChange={(e) => setConversationReply(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  aria-label={t.yourReply || 'Your reply'}
-                />
+                <div className="conversation-workspace">
+                  <div className="chat-thread" aria-label={t.conversationTranscript || 'Conversation'}>
+                    {conversationMessages.length === 0 ? (
+                      <div className="empty-thread">
+                        <p>{t.emptyConversation || 'No messages yet.'}</p>
+                      </div>
+                    ) : (
+                      conversationMessages.map((message) => {
+                        const isActive = activeConversationMessage?.id === message.id
+                        const isLongMessage = isVeryLongConversationMessage(message.text)
+                        const isExpanded = expandedConversationMessageIds.has(message.id)
+                        const isCollapsed = isLongMessage && !isExpanded
+
+                        return (
+                          <article
+                            key={message.id}
+                            className={`chat-message ${message.side === 'user' ? 'is-user' : 'is-other'} ${isActive ? 'is-active' : ''}`}
+                          >
+                            <div className="message-meta">
+                              <span
+                                className="message-author"
+                                data-active={isActive ? 'true' : 'false'}
+                              >
+                                {getConversationSideLabel(message.side)}
+                              </span>
+                              <select
+                                value={message.side}
+                                onChange={(e) => handleConversationSideChange(message.id, e.target.value)}
+                                className="message-side-select"
+                                aria-label={t.messageSide || 'Message side'}
+                              >
+                                <option value="user">{t.userSide || 'You'}</option>
+                                <option value="other">{t.otherSide || 'Other person'}</option>
+                              </select>
+                              <span>{getConversationSideLanguage(message.side)}</span>
+                              <IconButton
+                                className="danger-button"
+                                label={t.clear}
+                                onClick={() => handleRemoveConversationMessage(message.id)}
+                              >
+                                <Icon name="clear" size={15} />
+                              </IconButton>
+                            </div>
+                            <textarea
+                              ref={(el) => resizeMessageTextarea(el, isCollapsed)}
+                              className={`message-text ${isCollapsed ? 'is-collapsed' : ''}`}
+                              value={message.text}
+                              onChange={(e) => handleConversationMessageChange(message.id, e.target.value)}
+                              onKeyDown={handleKeyDown}
+                              aria-label={`${getConversationSideLabel(message.side)} ${t.messageText || 'message text'}`}
+                            />
+                            {isLongMessage && (
+                              <button
+                                type="button"
+                                className="message-expand-button"
+                                onClick={() => handleToggleConversationMessageExpanded(message.id)}
+                                aria-expanded={isExpanded}
+                              >
+                                {isExpanded ? (t.showLessMessage || 'Show less') : (t.showAllMessage || 'Show all')}
+                              </button>
+                            )}
+                          </article>
+                        )
+                      })
+                    )}
+                  </div>
+
+                  <div className="chat-composer">
+                    <div className="composer-side-switcher" role="radiogroup" aria-label={t.messageSide || 'Message side'}>
+                      {CONVERSATION_SIDES.map((side) => (
+                        <button
+                          key={side}
+                          type="button"
+                          className={conversationDraftSide === side ? 'is-active' : ''}
+                          onClick={() => setConversationDraftSide(side)}
+                          role="radio"
+                          aria-checked={conversationDraftSide === side}
+                        >
+                          {side === 'user' ? (t.userSide || 'You') : (t.otherSide || 'Other person')}
+                        </button>
+                      ))}
+                    </div>
+                    <textarea
+                      ref={conversationDraftRef}
+                      className="text-area auto-grow composer-text"
+                      placeholder={t.addConversationMessagePlaceholder || 'Insert a message from the chat...'}
+                      value={conversationDraftText}
+                      onChange={(e) => setConversationDraftText(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      aria-label={t.addConversationMessage || 'Add conversation message'}
+                    />
+                    <button
+                      type="button"
+                      className="add-message-button"
+                      onClick={handleAddConversationMessage}
+                      disabled={!conversationDraftText.trim()}
+                    >
+                      <Icon name="send" size={16} />
+                      <span>{t.addMessage || 'Add message'}</span>
+                    </button>
+                  </div>
+                </div>
               </article>
 
-              <article className="editor-pane output-pane">
+              <article className="editor-pane output-pane conversation-output-pane">
                 <div className="pane-toolbar">
                   <div>
-                    <h2>{t.translatedReply || 'Translated reply'}</h2>
-                    <p>{displaySelectedLang(conversationOtherLang, conversationCustomOtherLang)}</p>
+                    <h2>{t.translatedMessage || 'Translated message'}</h2>
+                    <p>{activeConversationMessage
+                      ? activeConversationTargetDisplay
+                      : (t.pickMessageToTranslate || 'Last inserted message')}
+                    </p>
                   </div>
                   <div className="pane-actions">
                     <span>{conversationTranslatedText.length}</span>
@@ -983,12 +1425,11 @@ export default function App() {
                   </div>
                 ) : (
                   <textarea
-                    ref={conversationOutputRef}
-                    className="text-area auto-grow"
-                    placeholder={t.translatedReplyPlaceholder || 'The translated reply will appear here...'}
+                    className="text-area conversation-output-text"
+                    placeholder={t.translatedMessagePlaceholder || 'The translated message will appear here...'}
                     value={conversationTranslatedText}
                     onChange={(e) => setConversationTranslatedText(e.target.value)}
-                    aria-label={t.translatedReply || 'Translated reply'}
+                    aria-label={t.translatedMessage || 'Translated message'}
                   />
                 )}
               </article>
@@ -1003,7 +1444,7 @@ export default function App() {
                 disabled={!canTranslate}
               >
                 <Icon name="send" size={18} />
-                <span>{loading ? t.translating : (t.translateReply || 'Translate reply')}</span>
+                <span>{loading ? t.translating : (t.translateMessage || 'Translate message')}</span>
               </button>
             </div>
           </>

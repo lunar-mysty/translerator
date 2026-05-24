@@ -344,13 +344,8 @@ button {
   box-shadow: 0 0 0 4px rgba(103, 232, 201, 0.11);
 }
 
-.settings-mode-switcher,
 .settings-locale-switcher {
   width: 100%;
-}
-
-.settings-mode-switcher button {
-  min-width: 0;
 }
 
 .settings-locale-switcher {
@@ -360,6 +355,101 @@ button {
 .settings-locale-switcher .locale-select {
   max-width: none;
   width: 100%;
+}
+
+.model-mode-details {
+  display: grid;
+  gap: 10px;
+}
+
+.model-mode-details > button {
+  display: grid;
+  gap: 10px;
+  padding: 13px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.model-mode-details > button:hover {
+  background: rgba(103, 232, 201, 0.055);
+  border-color: rgba(103, 232, 201, 0.26);
+}
+
+.model-mode-details > button:active {
+  transform: translateY(1px);
+}
+
+.model-mode-details > button.is-active {
+  background: rgba(103, 232, 201, 0.09);
+  border-color: rgba(103, 232, 201, 0.58);
+  box-shadow: 0 0 0 3px rgba(103, 232, 201, 0.08);
+}
+
+.model-mode-details > button:focus-visible {
+  outline: 0;
+  border-color: rgba(103, 232, 201, 0.72);
+  box-shadow: 0 0 0 4px rgba(103, 232, 201, 0.12);
+}
+
+.model-card-header,
+.model-card-usage {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.model-mode-details strong {
+  color: var(--text);
+  font-size: 0.95rem;
+  font-weight: 820;
+  line-height: 1.25;
+}
+
+.model-card-header > span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: 0.86rem;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-card-usage {
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.model-card-usage strong {
+  color: var(--accent);
+  font-size: 1.24rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.model-card-usage > span {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 740;
+  line-height: 1.35;
+}
+
+.model-card-reset {
+  color: var(--text-soft);
+  font-size: 0.78rem;
+  font-weight: 720;
+  line-height: 1.35;
 }
 
 .locale-select {
@@ -567,6 +657,241 @@ button {
 
 .conversation-grid {
   min-height: 360px;
+  height: min(62vh, 680px);
+}
+
+.conversation-pane {
+  min-height: 0;
+}
+
+.conversation-workspace {
+  display: grid;
+  grid-template-rows: minmax(220px, 1fr) auto;
+  min-height: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 160px),
+    var(--panel);
+}
+
+.chat-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 300px;
+  max-height: 560px;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.empty-thread {
+  display: grid;
+  min-height: 220px;
+  place-items: center;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.chat-message {
+  display: grid;
+  gap: 8px;
+  width: min(88%, 520px);
+  padding: 11px;
+  background: #18202b;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.chat-message.is-user {
+  align-self: flex-end;
+  background: rgba(103, 232, 201, 0.11);
+  border-color: rgba(103, 232, 201, 0.22);
+}
+
+.chat-message.is-other {
+  align-self: flex-start;
+}
+
+.chat-message.is-active {
+  border-color: rgba(122, 162, 255, 0.78);
+  box-shadow: 0 0 0 3px rgba(122, 162, 255, 0.12);
+}
+
+.message-meta {
+  display: grid;
+  grid-template-columns: auto minmax(92px, auto) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.message-author {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 820;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-author[data-active="true"] {
+  color: var(--blue);
+}
+
+.message-side-select {
+  width: 100%;
+  min-height: 30px;
+  padding: 0 28px 0 8px;
+  background-color: rgba(9, 11, 16, 0.74);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--text-soft);
+  cursor: pointer;
+  font-size: 0.76rem;
+  font-weight: 760;
+  outline: 0;
+}
+
+.message-side-select option {
+  background: var(--panel);
+  color: var(--text);
+}
+
+.message-meta > span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.74rem;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-text {
+  width: 100%;
+  min-height: 46px;
+  padding: 10px;
+  background: rgba(9, 11, 16, 0.52);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 0.95rem;
+  line-height: 1.55;
+  outline: 0;
+  resize: none;
+}
+
+.message-side-select:focus,
+.message-text:focus {
+  border-color: rgba(103, 232, 201, 0.72);
+  box-shadow: 0 0 0 3px rgba(103, 232, 201, 0.1);
+}
+
+.message-text.is-collapsed {
+  -webkit-mask-image: linear-gradient(180deg, #000 72%, transparent);
+  mask-image: linear-gradient(180deg, #000 72%, transparent);
+}
+
+.message-expand-button {
+  justify-self: start;
+  min-height: 30px;
+  padding: 0 10px;
+  background: rgba(122, 162, 255, 0.1);
+  border: 1px solid rgba(122, 162, 255, 0.24);
+  border-radius: var(--radius);
+  color: var(--blue);
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 820;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+}
+
+.message-expand-button:hover {
+  background: rgba(122, 162, 255, 0.16);
+  border-color: rgba(122, 162, 255, 0.38);
+  color: var(--text);
+}
+
+.chat-composer {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  padding: 14px;
+  background: var(--panel-2);
+  border-top: 1px solid var(--line);
+}
+
+.composer-side-switcher {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+.composer-side-switcher button {
+  min-width: 84px;
+  min-height: 32px;
+  padding: 0 10px;
+  background: var(--panel-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 820;
+}
+
+.composer-side-switcher button.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.text-area.composer-text {
+  min-height: 86px;
+  padding: 12px;
+  background: var(--panel-3);
+  border-color: var(--line);
+}
+
+.add-message-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 128px;
+  min-height: 44px;
+  padding: 0 14px;
+  background: rgba(103, 232, 201, 0.1);
+  border: 1px solid rgba(103, 232, 201, 0.22);
+  border-radius: var(--radius);
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 820;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.add-message-button:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.add-message-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.add-message-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
 }
 
 .editor-grid {
@@ -588,6 +913,10 @@ button {
 
 .output-pane {
   background: #0c1017;
+}
+
+.conversation-output-pane {
+  min-height: 0;
 }
 
 .pane-toolbar {
@@ -669,6 +998,15 @@ button {
   resize: none;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.conversation-output-pane .output-area,
+.conversation-output-text {
+  min-height: 0;
+  height: 100%;
+  max-height: none;
+  overflow-y: auto;
+  resize: none;
 }
 
 .loading-state {
@@ -851,6 +1189,18 @@ button {
     grid-template-columns: 1fr;
   }
 
+  .chat-composer {
+    grid-template-columns: 1fr;
+  }
+
+  .composer-side-switcher {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .add-message-button {
+    width: 100%;
+  }
+
   .swap-button {
     justify-self: center;
     margin-top: 0;
@@ -864,6 +1214,14 @@ button {
   .editor-grid {
     grid-template-columns: 1fr;
     min-height: 0;
+  }
+
+  .conversation-grid {
+    height: auto;
+  }
+
+  .conversation-output-pane {
+    min-height: 340px;
   }
 
   .editor-pane + .editor-pane {

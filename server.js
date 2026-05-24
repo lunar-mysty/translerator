@@ -46,6 +46,9 @@ const RATE_LIMIT_STORE_PATH = process.env.TRANSLERATOR_RATE_LIMIT_STORE_PATH
   ? resolve(__dirname, process.env.TRANSLERATOR_RATE_LIMIT_STORE_PATH)
   : join(__dirname, 'data', 'request-limits.json')
 const RATE_LIMIT_HASH_SALT = process.env.TRANSLERATOR_RATE_LIMIT_HASH_SALT || 'translerator-rate-limit'
+const CREDIT_CODE_FILE_PATH = process.env.TRANSLERATOR_CREDIT_CODE_FILE_PATH
+  ? resolve(__dirname, process.env.TRANSLERATOR_CREDIT_CODE_FILE_PATH)
+  : ''
 const MAX_TEXT_LENGTH = 12000
 const MAX_FIELD_LENGTH = 1024
 const MAX_CONVERSATION_MESSAGES = 80
@@ -261,19 +264,48 @@ async function readRateLimitStore() {
     const raw = await readFile(RATE_LIMIT_STORE_PATH, 'utf8')
     const parsed = JSON.parse(raw)
     if (!parsed || typeof parsed !== 'object') throw new Error('Invalid rate limit store')
-    return {
+    return normalizeRateLimitStore({
       version: 1,
       identities: {},
+      creditCodeRedemptions: {},
       ...parsed,
       identities: parsed.identities && typeof parsed.identities === 'object'
         ? parsed.identities
         : {},
-    }
+      creditCodeRedemptions: parsed.creditCodeRedemptions && typeof parsed.creditCodeRedemptions === 'object'
+        ? parsed.creditCodeRedemptions
+        : {},
+    })
   } catch (err) {
-    if (err.code === 'ENOENT') return { version: 1, identities: {} }
+    if (err.code === 'ENOENT') return { version: 1, identities: {}, creditCodeRedemptions: {} }
     console.warn('Rate limit store could not be read; starting with an empty store.', err)
-    return { version: 1, identities: {} }
+    return { version: 1, identities: {}, creditCodeRedemptions: {} }
   }
+}
+
+function normalizeRateLimitStore(store) {
+  for (const identity of Object.values(store.identities)) {
+    if (!identity || typeof identity !== 'object') continue
+
+    identity.buckets = identity.buckets && typeof identity.buckets === 'object'
+      ? identity.buckets
+      : {}
+    identity.creditBalances = identity.creditBalances && typeof identity.creditBalances === 'object'
+      ? identity.creditBalances
+      : {}
+
+    for (const [mode, bucket] of Object.entries(identity.buckets)) {
+      if (!MODEL_CONFIGS[mode] || !bucket || typeof bucket !== 'object') continue
+
+      const count = Number(bucket.count || 0)
+      if (count >= 0) continue
+
+      identity.creditBalances[mode] = getCreditBalance(identity, mode) + Math.abs(count)
+      bucket.count = 0
+    }
+  }
+
+  return store
 }
 
 async function writeRateLimitStore(store) {
@@ -310,80 +342,169 @@ function updateRateLimitStore(task) {
   return run
 }
 
+function getRemainingCredits(limit, count) {
+  return limit - count
+}
+
+function getCreditBalance(identity, mode) {
+  const balance = Number(identity?.creditBalances?.[mode] || 0)
+  return Number.isFinite(balance) && balance > 0 ? balance : 0
+}
+
+function addCreditBalance(identity, mode, amount) {
+  identity.creditBalances ||= {}
+  identity.creditBalances[mode] = getCreditBalance(identity, mode) + amount
+}
+
+function consumeCreditBalances(store, signals, mode, amount, now = Date.now()) {
+  let consumed = 0
+
+  for (const signal of signals) {
+    const identity = store.identities[`${signal.type}:${signal.valueHash}`]
+    const balance = getCreditBalance(identity, mode)
+    if (balance <= 0) continue
+
+    identity.lastSeenAt = new Date(now).toISOString()
+    identity.creditBalances[mode] = Math.max(0, balance - amount)
+    consumed = Math.max(consumed, Math.min(balance, amount))
+  }
+
+  return consumed
+}
+
+function getHighestCreditBalanceFromSignals(store, signals, mode) {
+  return signals.reduce((highest, signal) => {
+    const identity = store.identities[`${signal.type}:${signal.valueHash}`]
+    return Math.max(highest, getCreditBalance(identity, mode))
+  }, 0)
+}
+
+function getHighestCountFromSignals(store, signals, mode, now) {
+  let highestCount = null
+  let resetAt = null
+
+  for (const signal of signals) {
+    const identity = store.identities[`${signal.type}:${signal.valueHash}`]
+    const bucket = identity?.buckets?.[mode]
+    if (!bucket || now - Number(bucket.windowStart || 0) >= RATE_LIMIT_WINDOW_MS) continue
+
+    const count = Number(bucket.count || 0)
+    highestCount = highestCount === null ? count : Math.max(highestCount, count)
+    const bucketResetAt = Number(bucket.windowStart || now) + RATE_LIMIT_WINDOW_MS
+    resetAt = resetAt === null ? bucketResetAt : Math.min(resetAt, bucketResetAt)
+  }
+
+  return {
+    highestCount: highestCount === null ? 0 : highestCount,
+    resetAt,
+  }
+}
+
+function buildRateLimitUsage(mode, highestCount, resetAt, creditBalance = 0) {
+  const config = MODEL_CONFIGS[mode]
+
+  return {
+    mode,
+    label: config.label,
+    model: config.displayModel,
+    limit: config.limit,
+    creditBalance,
+    remaining: getRemainingCredits(config.limit, highestCount) + creditBalance,
+    resetAt: resetAt === null ? null : new Date(resetAt).toISOString(),
+    windowHours: 24,
+  }
+}
+
+function getRateLimitSnapshotFromStore(store, signals, now) {
+  return Object.fromEntries(
+    Object.entries(MODEL_CONFIGS).map(([mode]) => {
+      const { highestCount, resetAt } = getHighestCountFromSignals(store, signals, mode, now)
+      const creditBalance = getHighestCreditBalanceFromSignals(store, signals, mode)
+      return [mode, buildRateLimitUsage(mode, highestCount, resetAt, creditBalance)]
+    })
+  )
+}
+
 async function recordRateLimit(req, mode) {
   const config = MODEL_CONFIGS[mode]
   const signals = getRateLimitSignals(req)
   const now = Date.now()
 
   return updateRateLimitStore((store) => {
-    let highestCount = 0
-    let resetAt = now + RATE_LIMIT_WINDOW_MS
+    const currentUsage = getHighestCountFromSignals(store, signals, mode, now)
+    const currentCreditBalance = getHighestCreditBalanceFromSignals(store, signals, mode)
+    let highestCount = currentUsage.highestCount
+    let resetAt = currentUsage.resetAt
     let blockingType = ''
 
-    for (const signal of signals) {
-      const key = `${signal.type}:${signal.valueHash}`
-      const identity = store.identities[key] || { type: signal.type, valueHash: signal.valueHash, buckets: {} }
-      const bucket = getFreshBucket(identity, mode, now)
-      highestCount = Math.max(highestCount, bucket.count)
-      resetAt = Math.min(resetAt, bucket.windowStart + RATE_LIMIT_WINDOW_MS)
-      if (bucket.count >= config.limit && !blockingType) blockingType = signal.type
+    if (highestCount >= config.limit && currentCreditBalance <= 0) {
+      blockingType = signals.find((signal) => {
+        const identity = store.identities[`${signal.type}:${signal.valueHash}`]
+        const bucket = identity?.buckets?.[mode]
+        return bucket && Number(bucket.count || 0) >= config.limit
+      })?.type || 'usage'
     }
 
     if (blockingType) {
       return {
         allowed: false,
-        usage: {
-          mode,
-          label: config.label,
-          model: config.displayModel,
-          limit: config.limit,
-          remaining: 0,
-          resetAt: new Date(resetAt).toISOString(),
-          windowHours: 24,
-        },
+        usage: buildRateLimitUsage(mode, highestCount, resetAt, currentCreditBalance),
         blockingType,
       }
     }
 
-    for (const signal of signals) {
-      const key = `${signal.type}:${signal.valueHash}`
-      const identity = store.identities[key] || {
-        type: signal.type,
-        valueHash: signal.valueHash,
-        firstSeenAt: new Date(now).toISOString(),
-        buckets: {},
+    let chargeType = 'bucket'
+
+    if (currentCreditBalance > 0) {
+      consumeCreditBalances(store, signals, mode, 1, now)
+      chargeType = 'credit'
+    } else {
+      for (const signal of signals) {
+        const key = `${signal.type}:${signal.valueHash}`
+        const identity = store.identities[key] || {
+          type: signal.type,
+          valueHash: signal.valueHash,
+          firstSeenAt: new Date(now).toISOString(),
+          buckets: {},
+        }
+        identity.lastSeenAt = new Date(now).toISOString()
+        const bucket = getFreshBucket(identity, mode, now)
+        bucket.count = Number(bucket.count || 0) + 1
+        store.identities[key] = identity
       }
-      identity.lastSeenAt = new Date(now).toISOString()
-      const bucket = getFreshBucket(identity, mode, now)
-      bucket.count += 1
-      store.identities[key] = identity
-      highestCount = Math.max(highestCount, bucket.count)
-      resetAt = Math.min(resetAt, bucket.windowStart + RATE_LIMIT_WINDOW_MS)
+
+      const nextUsage = getHighestCountFromSignals(store, signals, mode, now)
+      highestCount = nextUsage.highestCount
+      resetAt = nextUsage.resetAt
     }
+
+    const creditBalance = getHighestCreditBalanceFromSignals(store, signals, mode)
 
     return {
       allowed: true,
-      usage: {
-        mode,
-        label: config.label,
-        model: config.displayModel,
-        limit: config.limit,
-        remaining: Math.max(0, config.limit - highestCount),
-        resetAt: new Date(resetAt).toISOString(),
-        windowHours: 24,
-      },
+      chargeType,
+      usage: buildRateLimitUsage(mode, highestCount, resetAt, creditBalance),
     }
   })
 }
 
-async function refundRateLimit(req, mode) {
-  const config = MODEL_CONFIGS[mode]
+async function refundRateLimit(req, mode, chargeType = 'bucket') {
   const signals = getRateLimitSignals(req)
   const now = Date.now()
 
   return updateRateLimitStore((store) => {
-    let highestCount = 0
-    let resetAt = null
+    if (chargeType === 'credit') {
+      for (const signal of signals) {
+        const key = `${signal.type}:${signal.valueHash}`
+        const identity = store.identities[key]
+        if (!identity) continue
+
+        addCreditBalance(identity, mode, 1)
+        identity.lastSeenAt = new Date(now).toISOString()
+      }
+
+      return getRateLimitSnapshotFromStore(store, signals, now)[mode]
+    }
 
     for (const signal of signals) {
       const key = `${signal.type}:${signal.valueHash}`
@@ -393,20 +514,9 @@ async function refundRateLimit(req, mode) {
 
       bucket.count = Math.max(0, Number(bucket.count || 0) - 1)
       identity.lastSeenAt = new Date(now).toISOString()
-      highestCount = Math.max(highestCount, bucket.count)
-      const bucketResetAt = Number(bucket.windowStart || now) + RATE_LIMIT_WINDOW_MS
-      resetAt = resetAt === null ? bucketResetAt : Math.min(resetAt, bucketResetAt)
     }
 
-    return {
-      mode,
-      label: config.label,
-      model: config.displayModel,
-      limit: config.limit,
-      remaining: Math.max(0, config.limit - highestCount),
-      resetAt: resetAt === null ? null : new Date(resetAt).toISOString(),
-      windowHours: 24,
-    }
+    return getRateLimitSnapshotFromStore(store, signals, now)[mode] || buildRateLimitUsage(mode, 0, null, 0)
   })
 }
 
@@ -415,32 +525,263 @@ async function getRateLimitSnapshot(req) {
   const store = await readRateLimitStore()
   const now = Date.now()
 
-  return Object.fromEntries(
-    Object.entries(MODEL_CONFIGS).map(([mode, config]) => {
-      let highestCount = 0
-      let resetAt = null
+  return getRateLimitSnapshotFromStore(store, signals, now)
+}
 
-      for (const signal of signals) {
-        const identity = store.identities[`${signal.type}:${signal.valueHash}`]
-        const bucket = identity?.buckets?.[mode]
-        if (!bucket || now - Number(bucket.windowStart || 0) >= RATE_LIMIT_WINDOW_MS) continue
+function normalizeCreditCode(code) {
+  return cleanField(code).toUpperCase()
+}
 
-        highestCount = Math.max(highestCount, Number(bucket.count || 0))
-        const bucketResetAt = Number(bucket.windowStart || now) + RATE_LIMIT_WINDOW_MS
-        resetAt = resetAt === null ? bucketResetAt : Math.min(resetAt, bucketResetAt)
+async function readCreditCodeFile() {
+  if (!CREDIT_CODE_FILE_PATH) {
+    const err = new Error('Credit codes are not configured.')
+    err.status = 503
+    throw err
+  }
+
+  try {
+    const raw = await readFile(CREDIT_CODE_FILE_PATH, 'utf8')
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') throw new Error('Invalid credit code file')
+    const codes = parsed.codes && typeof parsed.codes === 'object' ? parsed.codes : parsed
+
+    return Object.fromEntries(
+      Object.entries(codes)
+        .map(([code, definition]) => [normalizeCreditCode(code), definition])
+        .filter(([code]) => Boolean(code))
+    )
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      const missingErr = new Error('Credit codes are not configured.')
+      missingErr.status = 503
+      throw missingErr
+    }
+
+    console.warn('Credit code file could not be read.', err)
+    const invalidErr = new Error('Credit codes are not available.')
+    invalidErr.status = 500
+    throw invalidErr
+  }
+}
+
+function normalizeCreditCodeCredits(rawCredits = {}) {
+  const credits = {}
+
+  if (!rawCredits || typeof rawCredits !== 'object' || Array.isArray(rawCredits)) return credits
+
+  for (const [rawMode, rawAmount] of Object.entries(rawCredits)) {
+    const mode = normalizeModelMode(rawMode)
+    if (!MODEL_CONFIGS[mode]) continue
+
+    const amount = Number(rawAmount)
+    if (!Number.isFinite(amount) || amount <= 0) continue
+    const creditsToApply = Math.floor(amount)
+    if (creditsToApply <= 0) continue
+    credits[mode] = creditsToApply
+  }
+
+  return credits
+}
+
+function normalizeCreditCodeRedemptionMode(definition) {
+  const rawMode = cleanField(
+    definition.redemptionMode ??
+    definition.oneTimeUseMode ??
+    definition.useMode ??
+    definition.uses
+  ).toLowerCase()
+
+  if (
+    definition.unlimitedUses === true ||
+    definition.oneTimeUse === false ||
+    ['unlimited', 'unlimiteduses', 'infinite', 'none'].includes(rawMode)
+  ) {
+    return 'unlimited'
+  }
+
+  if (
+    definition.oneTimeUse === 'identity' ||
+    definition.oneTimeUsePerIdentity === true ||
+    [
+      'identity',
+      'peridentity',
+      'per-identity',
+      'onceperidentity',
+      'once-per-identity',
+      'one-time-per-identity',
+    ].includes(rawMode)
+  ) {
+    return 'identity'
+  }
+
+  if (
+    definition.oneTimeUse === true ||
+    definition.oneTimeUseGlobal === true ||
+    definition.oneTimeUse === 'global' ||
+    [
+      '',
+      'global',
+      'once',
+      'onetime',
+      'one-time',
+      'onceglobal',
+      'once-global',
+      'one-time-global',
+    ].includes(rawMode)
+  ) {
+    return 'global'
+  }
+
+  return 'global'
+}
+
+function normalizeCreditCodeDefinition(definition) {
+  if (!definition || typeof definition !== 'object' || Array.isArray(definition)) return null
+
+  const credits = normalizeCreditCodeCredits(definition.credits)
+  if (Object.keys(credits).length === 0) return null
+
+  const expiresAt = definition.expiresAt ?? definition.expireAt ?? definition.expires ?? definition.expireDate
+  const expiresAtNumber = expiresAt === undefined || expiresAt === null || expiresAt === ''
+    ? null
+    : Number(expiresAt)
+
+  return {
+    credits,
+    redemptionMode: normalizeCreditCodeRedemptionMode(definition),
+    expiresAt: Number.isFinite(expiresAtNumber) ? expiresAtNumber : null,
+    message: typeof definition.message === 'string' ? definition.message.trim() : '',
+  }
+}
+
+function isCreditCodeExpired(expiresAt, now) {
+  if (expiresAt === null) return false
+  const expiresAtMs = expiresAt > 1e12 ? expiresAt : expiresAt * 1000
+  return now > expiresAtMs
+}
+
+function getCreditCodeIdentitySignals(signals) {
+  const preferredSignals = signals.filter((signal) => (
+    ['cookie', 'client-id', 'hardware-id'].includes(signal.type)
+  ))
+  const fallbackSignals = signals.filter((signal) => signal.type !== 'ip')
+  return preferredSignals.length > 0
+    ? preferredSignals
+    : fallbackSignals.length > 0
+      ? fallbackSignals
+      : signals
+}
+
+function getCreditCodeIdentityRedemptionKeys(signals) {
+  const redemptionSignals = getCreditCodeIdentitySignals(signals)
+
+  return redemptionSignals.map((signal) => hashSignal(`credit-code-identity:${signal.type}:${signal.valueHash}`))
+}
+
+function isCreditCodeAlreadyRedeemed(store, codeHash, definition, identityRedemptionKeys) {
+  const redemption = store.creditCodeRedemptions?.[codeHash]
+
+  if (definition.redemptionMode === 'unlimited') return false
+  if (!redemption) return false
+
+  if (definition.redemptionMode === 'global') return true
+
+  if (typeof redemption !== 'object') return true
+  const identities = redemption.identities && typeof redemption.identities === 'object'
+    ? redemption.identities
+    : {}
+
+  return identityRedemptionKeys.some((key) => Boolean(identities[key]))
+}
+
+function recordCreditCodeRedemption(store, codeHash, definition, identityRedemptionKeys, now) {
+  if (definition.redemptionMode === 'unlimited') return
+
+  const redeemedAt = new Date(now).toISOString()
+  if (definition.redemptionMode === 'global') {
+    store.creditCodeRedemptions[codeHash] = {
+      mode: 'global',
+      redeemedAt,
+    }
+    return
+  }
+
+  const redemption = store.creditCodeRedemptions[codeHash]
+  const identities = redemption && typeof redemption === 'object' && redemption.identities && typeof redemption.identities === 'object'
+    ? redemption.identities
+    : {}
+
+  for (const key of identityRedemptionKeys) {
+    identities[key] = { redeemedAt }
+  }
+
+  store.creditCodeRedemptions[codeHash] = {
+    mode: 'identity',
+    identities,
+  }
+}
+
+async function redeemCreditCode(req, code) {
+  const normalizedCode = normalizeCreditCode(code)
+  if (!normalizedCode) {
+    const err = new Error('Enter a credit code.')
+    err.status = 400
+    throw err
+  }
+
+  const codes = await readCreditCodeFile()
+  const definition = normalizeCreditCodeDefinition(codes[normalizedCode])
+  if (!definition) {
+    const err = new Error('That credit code was not found.')
+    err.status = 404
+    throw err
+  }
+
+  const now = Date.now()
+  if (isCreditCodeExpired(definition.expiresAt, now)) {
+    const err = new Error('That credit code has expired.')
+    err.status = 410
+    throw err
+  }
+
+  const signals = getRateLimitSignals(req)
+  const creditIdentitySignals = getCreditCodeIdentitySignals(signals)
+  const codeHash = hashSignal(`credit-code:${normalizedCode}`)
+  const identityRedemptionKeys = getCreditCodeIdentityRedemptionKeys(signals)
+
+  return updateRateLimitStore((store) => {
+    store.creditCodeRedemptions ||= {}
+
+    if (isCreditCodeAlreadyRedeemed(store, codeHash, definition, identityRedemptionKeys)) {
+      const err = new Error('That credit code has already been redeemed.')
+      err.status = 409
+      throw err
+    }
+
+    for (const signal of creditIdentitySignals) {
+      const key = `${signal.type}:${signal.valueHash}`
+      const identity = store.identities[key] || {
+        type: signal.type,
+        valueHash: signal.valueHash,
+        firstSeenAt: new Date(now).toISOString(),
+        buckets: {},
       }
 
-      return [mode, {
-        mode,
-        label: config.label,
-        model: config.displayModel,
-        limit: config.limit,
-        remaining: Math.max(0, config.limit - highestCount),
-        resetAt: resetAt === null ? null : new Date(resetAt).toISOString(),
-        windowHours: 24,
-      }]
-    })
-  )
+      identity.lastSeenAt = new Date(now).toISOString()
+      for (const [mode, amount] of Object.entries(definition.credits)) {
+        addCreditBalance(identity, mode, amount)
+      }
+      store.identities[key] = identity
+    }
+
+    recordCreditCodeRedemption(store, codeHash, definition, identityRedemptionKeys, now)
+
+    return {
+      credits: definition.credits,
+      message: definition.message,
+      rateLimits: getRateLimitSnapshotFromStore(store, signals, now),
+    }
+  })
 }
 
 function normalizeConversationMessages(body, activeMessageId = '') {
@@ -730,6 +1071,22 @@ app.post('/api/rate-limits', async (req, res) => {
   }
 })
 
+app.post('/api/credit-codes/redeem', async (req, res) => {
+  try {
+    const redemption = await redeemCreditCode(req, req.body?.code)
+    res.json({
+      redeemed: true,
+      credits: redemption.credits,
+      message: redemption.message,
+      rateLimits: redemption.rateLimits,
+    })
+  } catch (err) {
+    const status = err.status || 500
+    if (status >= 500) console.error('Credit code redemption error:', err)
+    res.status(status).json({ error: err.message || 'Credit code could not be redeemed.' })
+  }
+})
+
 app.post('/api/translate', async (req, res) => {
   const validation = validateTranslateBody(req.body)
 
@@ -791,7 +1148,7 @@ app.post('/api/translate', async (req, res) => {
 
     const parsed = parseModelResponse(providerMessage)
     if (parsed.status === 'blocked') {
-      const refundedRateLimit = await refundRateLimit(req, validation.modelMode)
+      const refundedRateLimit = await refundRateLimit(req, validation.modelMode, rateLimit.chargeType)
       return res.status(422).json({
         rejected: true,
         rejectionType: 'safety',
@@ -802,7 +1159,7 @@ app.post('/api/translate', async (req, res) => {
     }
 
     if (parsed.status === 'untranslatable') {
-      const refundedRateLimit = await refundRateLimit(req, validation.modelMode)
+      const refundedRateLimit = await refundRateLimit(req, validation.modelMode, rateLimit.chargeType)
       return res.status(422).json({
         rejected: true,
         rejectionType: 'untranslatable',
@@ -827,7 +1184,7 @@ app.post('/api/translate', async (req, res) => {
     let refundedRateLimit = null
     if (shouldRefundRateLimit) {
       try {
-        refundedRateLimit = await refundRateLimit(req, validation.modelMode)
+        refundedRateLimit = await refundRateLimit(req, validation.modelMode, rateLimit?.chargeType)
       } catch (refundErr) {
         console.error('Rate limit refund error:', refundErr)
       }

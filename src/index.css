@@ -357,6 +357,58 @@ button {
   width: 100%;
 }
 
+.privacy-overlay {
+  justify-content: center;
+  align-items: center;
+  padding: 20px;
+}
+
+.privacy-panel {
+  width: min(720px, 100%);
+  min-height: 0;
+  max-height: min(780px, calc(100vh - 40px));
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.privacy-content {
+  gap: 20px;
+}
+
+.privacy-section {
+  display: grid;
+  gap: 10px;
+}
+
+.privacy-section + .privacy-section {
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.privacy-section h3 {
+  color: var(--text);
+  font-size: 0.96rem;
+  font-weight: 820;
+  line-height: 1.25;
+}
+
+.privacy-section p {
+  color: var(--text-soft);
+  font-size: 0.91rem;
+  line-height: 1.65;
+}
+
+.privacy-section code {
+  padding: 0.1em 0.32em;
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--accent);
+  font-size: 0.86em;
+}
+
 .model-mode-details {
   display: grid;
   gap: 10px;
@@ -1154,19 +1206,33 @@ button {
 }
 
 .footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
   padding: 22px 0 0;
   color: var(--muted);
   font-size: 0.84rem;
   text-align: center;
 }
 
-.footer a {
+.footer a,
+.footer-link {
   color: var(--accent);
   font-weight: 750;
   text-decoration: none;
 }
 
-.footer a:hover {
+.footer-link {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.footer a:hover,
+.footer-link:hover {
   text-decoration: underline;
 }
 
@@ -1188,6 +1254,15 @@ button {
   border-left: 0;
   border-right: 1px solid var(--line);
   box-shadow: 28px 0 80px rgba(0, 0, 0, 0.35);
+}
+
+[dir="rtl"] .privacy-overlay {
+  justify-content: center;
+}
+
+[dir="rtl"] .privacy-panel {
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
 }
 
 [dir="rtl"] .settings-header {
@@ -1243,6 +1318,16 @@ button {
 
   .settings-panel {
     width: min(100%, 460px);
+  }
+
+  .privacy-overlay {
+    align-items: stretch;
+    padding: 12px;
+  }
+
+  .privacy-panel {
+    width: 100%;
+    max-height: calc(100vh - 24px);
   }
 
   .language-bar {
@@ -1346,12 +1431,22 @@ button {
     align-items: flex-end;
   }
 
+  .privacy-overlay {
+    align-items: stretch;
+  }
+
   .settings-panel {
     width: 100%;
     min-height: min(100vh, 620px);
     max-height: 100vh;
     border-top: 1px solid var(--line);
     border-left: 0;
+  }
+
+  .privacy-panel {
+    min-height: 0;
+    max-height: calc(100vh - 18px);
+    border: 1px solid var(--line);
   }
 
   .pane-toolbar {

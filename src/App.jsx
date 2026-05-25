@@ -350,6 +350,117 @@ function IconButton({ label, onClick, children, className = '', disabled = false
   )
 }
 
+const PRIVACY_AND_USE_UPDATED = 'Last updated May 25, 2026'
+const PRIVACY_AND_USE_SECTIONS = [
+  {
+    title: 'Summary',
+    paragraphs: [
+      'Translerator uses the text and settings you provide to make translations work, remembers app preferences on your device, and uses limited identity signals to enforce request limits and credit codes. It does not create accounts, sell your information, or use your text for ads.',
+      'Translerator is open source, including its frontend and backend code. This policy is meant to be a readable guide to what that code uses and why, for people who want the privacy details without reading the whole codebase.',
+    ],
+  },
+  {
+    title: 'Information you type into the app',
+    paragraphs: [
+      'The app uses source text, conversation messages, participant names, selected languages, custom language names, tone or style instructions, model mode, and the active message you choose to translate. This information is used to create the translation request, produce the translated output, apply safety and untranslatable-text checks, and show the result in the app.',
+      'Translation requests are sent to the Translerator server, then to OpenRouter and the selected AI model provider so they can generate the translation. Do not enter text you do not want processed by those services.',
+    ],
+  },
+  {
+    title: 'Information saved on your device',
+    paragraphs: [
+      'Translerator stores app state in your browser\'s local storage, including your source text, translated text, conversation messages, selected languages, custom languages, names, tone, model mode, auto-translate setting, and interface language. This is used to restore the app when you come back.',
+      'The app also creates persistent client and hardware IDs in local storage, and a translerator_client_id cookie. These are used for rate limits and credit code redemption.',
+    ],
+  },
+  {
+    title: 'Information used for limits and credits',
+    paragraphs: [
+      'To keep request limits fair, the server uses hashed signals from your request: IP address, the Translerator cookie, client ID, hardware ID, user agent, accepted language, platform, browser vendor, browser language list, timezone, hardware concurrency, device memory, touch support, screen details, cookie support, and Do Not Track setting.',
+      'The rate-limit store keeps hashes of these signals, first-seen and last-seen times, per-model request counts, 24-hour window start times, credit balances, and hashed credit code redemption records. This is used only to calculate remaining requests, reset times, extra credits, and whether a credit code was already used.',
+    ],
+  },
+  {
+    title: 'Service and error data',
+    paragraphs: [
+      'The server may receive ordinary technical request data such as headers needed to run the service. If an error happens, limited error details may be logged so the service can be debugged and kept available.',
+    ],
+  },
+  {
+    title: 'What this information is not used for',
+    paragraphs: [
+      'Translerator does not use this information to build advertising profiles, sell personal information, run third-party ads, or create public profiles.',
+    ],
+  },
+  {
+    title: 'Your choices',
+    paragraphs: [
+      'You can clear saved text, preferences, IDs, and cookies by clearing this site\'s browser data. Clearing browser data may reset your local app state, request-limit identity, and credit-code recognition.',
+    ],
+  },
+  {
+    title: 'Acceptable use',
+    paragraphs: [
+      'Use Translerator for ordinary translation, conversation help, and language understanding. Do not use it to request serious harm, illegal activity, hate, sexual content involving minors, harassment, abuse, or attempts to bypass request limits, credit rules, or safety checks.',
+    ],
+  },
+  {
+    title: 'Translation disclaimer',
+    paragraphs: [
+      'Translations can be wrong, incomplete, awkward, or missing important context. Do not rely on Translerator as the only source for legal, medical, emergency, financial, immigration, school discipline, or other high-stakes decisions.',
+      'Avoid entering passwords, API keys, private documents, or anything else you would not want processed by the translation service and model provider.',
+    ],
+  },
+  {
+    title: 'Service and open-source notes',
+    paragraphs: [
+      'Translerator is a small open-source hobby project. The service may change, break, rate-limit requests, or become unavailable, and the code is provided so people can inspect how it works.',
+    ],
+  },
+]
+
+function PrivacyPolicy({ onClose }) {
+  const sections = PRIVACY_AND_USE_SECTIONS
+
+  return (
+    <div
+      className="settings-overlay privacy-overlay"
+      role="presentation"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <aside
+        className="settings-panel privacy-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="privacy-title"
+      >
+        <div className="settings-header">
+          <div>
+            <h2 id="privacy-title">Privacy & Use</h2>
+            <p>{PRIVACY_AND_USE_UPDATED}</p>
+          </div>
+          <IconButton label="Close Privacy & Use" onClick={onClose}>
+            <Icon name="x" size={18} />
+          </IconButton>
+        </div>
+
+        <div className="settings-content privacy-content">
+          {sections.map((section) => (
+            <section className="privacy-section" key={section.title}>
+              <h3>{section.title}</h3>
+              {section.paragraphs.map((paragraph) => (
+                <p key={paragraph}>{paragraph}</p>
+              ))}
+            </section>
+          ))}
+        </div>
+      </aside>
+    </div>
+  )
+}
+
 export default function App() {
   const { locale, changeLocale, t } = useI18n()
   const saved = useRef(loadSaved()).current
@@ -383,6 +494,7 @@ export default function App() {
   const [creditCodeStatus, setCreditCodeStatus] = useState(null)
   const [autoTranslateEnabled, setAutoTranslateEnabled] = useState(saved.autoTranslateEnabled !== false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [privacyOpen, setPrivacyOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [copiedSource, setCopiedSource] = useState(false)
@@ -652,15 +764,18 @@ export default function App() {
   }, [autoTranslateEnabled, clearPendingAutoTranslate])
 
   useEffect(() => {
-    if (!settingsOpen) return undefined
+    if (!settingsOpen && !privacyOpen) return undefined
 
     const handleEscape = (e) => {
-      if (e.key === 'Escape') setSettingsOpen(false)
+      if (e.key === 'Escape') {
+        setSettingsOpen(false)
+        setPrivacyOpen(false)
+      }
     }
 
     window.addEventListener('keydown', handleEscape)
     return () => window.removeEventListener('keydown', handleEscape)
-  }, [settingsOpen])
+  }, [settingsOpen, privacyOpen])
 
   const handleSwap = () => {
     if (sourceLang === 'Auto-detect') return
@@ -1148,6 +1263,8 @@ export default function App() {
         </div>
       )}
 
+      {privacyOpen && <PrivacyPolicy onClose={() => setPrivacyOpen(false)} />}
+
       <main className="workspace">
         <section className="app-mode-bar" aria-label={t.translationMode || 'Translation mode'}>
           <div className="mode-switcher app-mode-switcher" role="tablist" aria-label={t.translationMode || 'Translation mode'}>
@@ -1531,7 +1648,11 @@ export default function App() {
       </main>
 
       <footer className="footer">
-        {t.madeWith} <a href="https://mysty.lol" target="_blank" rel="noopener noreferrer">mysty</a> {t.withAI}
+        <span>{t.madeWith} <a href="https://mysty.lol" target="_blank" rel="noopener noreferrer">mysty</a> {t.withAI}</span>
+        <span aria-hidden="true">·</span>
+        <button type="button" className="footer-link" onClick={() => setPrivacyOpen(true)}>
+          Privacy & Use
+        </button>
       </footer>
     </div>
   )
